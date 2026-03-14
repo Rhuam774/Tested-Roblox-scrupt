@@ -1,945 +1,416 @@
-print("[DELTA v10.6] Rápido...")
-
-local LogBuffer = {}
-local MAX_LOGS = 500
-local logLabelRef = nil
-
-local function addLog(msg, tipo)
-    tipo = tipo or "INFO"
-    local ts = os and os.date and os.date("%H:%M:%S") or "??:??:??"
-    local entry = "[" .. ts .. "] [" .. tipo .. "] " .. tostring(msg)
-    table.insert(LogBuffer, entry)
-    if #LogBuffer > MAX_LOGS then table.remove(LogBuffer, 1) end
-    print(entry)
-    if logLabelRef and logLabelRef.Parent then
-        pcall(function()
-            logLabelRef.Text = table.concat(LogBuffer, "\n")
-            local p = logLabelRef.Parent
-            if p:IsA("ScrollingFrame") then
-                p.CanvasSize = UDim2.new(0, 0, 0, logLabelRef.TextBounds.Y + 40)
-            end
-        end)
-    end
-end
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local PathfindingService = game:GetService("PathfindingService")
 local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
-task.wait(1)
+print("[SIMPLES] Iniciando...")
 
--- Rayfield
-local Rayfield = nil
-do
-    local ok, result = pcall(function() return loadstring(game:HttpGet('https://sirius.menu/rayfield'))() end)
-    if ok and result then Rayfield = result; addLog("Rayfield OK", "OK")
-    else addLog("ERRO Rayfield", "ERRO"); return end
-end
+task.wait(2)
+
+-- Carregar Rayfield
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+print("[SIMPLES] Rayfield OK")
+
+-- Criar janela
+local Window = Rayfield:CreateWindow({
+    Name = "Delta Clone",
+    LoadingTitle = "Clone Test",
+    LoadingSubtitle = "Versao simples",
+    ConfigurationSaving = {Enabled = false},
+    Discord = {Enabled = false},
+    KeySystem = false,
+})
+print("[SIMPLES] Janela criada")
 
 -- ============================================================
--- VARIAVEIS
+-- VARIAVEIS DE CLONE
 -- ============================================================
-local seguindo = false
-local playerAlvo = nil
-local conexaoSeguir = nil
-local distanciaSeguir = 3
-local walkSpeedOriginal = 16
-local modoInvisivel = false
-local modoSeguir = "normal"
-local highlightSelecionado = nil
-local playerSelecionadoNome = nil
-local speedAtivo = false
-local speedValor = 50
-local conexaoSpeed = nil
-local estaDancando = false
-local dancaCancelada = false
-local alvoEstaParado = false
-local alvoParadoTimer = 0
-local alvoParadoThreshold = 0.8
-local alvoUltimaPos = nil
-local meuPersonagemPerto = false
-local dancarAoParar = true
-local selecaoPorToque = false
-local conexaoToque = nil
-local toqueCooldownAtivo = false
-local toqueCooldownTimer = 0
-local fugindo = false
-local playerPerseguidor = nil
-local playerPerseguidorNome = nil
-local conexaoFugir = nil
-local fugirHighlight = nil
-local fugirDistanciaSegura = 30
-local fugirDistanciaMinima = 8
-local inimigoPosAnterior = nil
-local fantasmaAtivo = false
-local fantasmaTimer = 0
-local FANTASMA_DURACAO = 1.5
-local fugirCollisionsBackup = {}
-
 local clonesAtivos = {}
-local cloneAlvo = nil
-local cloneAlvoNome = nil
-local cloneDistancia = 5
-local cloneSpawnRaio = 15
-local cloneVelocidade = 22
-local cloneDancar = true
-local cloneContador = 0
 local clonePasta = nil
-local animAndarAtual = 1
+local cloneContador = 0
+local cloneAlvo = nil
+local cloneVelocidade = 22
+local cloneDistancia = 5
+local cloneDancar = true
 local animDancaAtual = 1
-local animAndarTrack = nil
-local animDancaTrack = nil
-local animSentadoTrack = nil
 
-local ANIM_SENTADO = "rbxassetid://2506281703"
-local ANIMS_ANDAR = {
-    {nome="Normal",id="rbxassetid://180426354"},
-    {nome="Ninja",id="rbxassetid://656118852"},
-    {nome="Zombie",id="rbxassetid://616163682"},
-    {nome="Velho",id="rbxassetid://616006778"},
-    {nome="Cowboy",id="rbxassetid://5765898383"},
-    {nome="Confiante",id="rbxassetid://616010382"},
-    {nome="Sorrateiro",id="rbxassetid://616003713"},
-    {nome="Manco",id="rbxassetid://616008087"},
-    {nome="Robozinho",id="rbxassetid://616013216"},
-    {nome="Feliz",id="rbxassetid://5765891244"},
-}
 local DANCAS = {
-    {nome="Floss",id="rbxassetid://5917459365"},
-    {nome="Hype",id="rbxassetid://5918726674"},
-    {nome="Twerk",id="rbxassetid://3360816860"},
-    {nome="Orange Justice",id="rbxassetid://5918580760"},
-    {nome="Default Dance",id="rbxassetid://5915773155"},
-    {nome="Robot",id="rbxassetid://616006778"},
-    {nome="Electro Shuffle",id="rbxassetid://5913382268"},
-    {nome="Capoeira",id="rbxassetid://5862461553"},
-    {nome="Breakdance",id="rbxassetid://5917600302"},
-    {nome="Macarena",id="rbxassetid://5915791549"},
-    {nome="Gangnam Style",id="rbxassetid://4212455378"},
-    {nome="Dab",id="rbxassetid://5915693819"},
-    {nome="Salsa",id="rbxassetid://5915827002"},
-    {nome="Twist",id="rbxassetid://5915831765"},
-    {nome="Chicken Dance",id="rbxassetid://5915805935"},
-    {nome="Running Man",id="rbxassetid://5917468522"},
-    {nome="Kick It",id="rbxassetid://5918634604"},
-    {nome="Pop Lock",id="rbxassetid://5913287938"},
-    {nome="Celebrate",id="rbxassetid://5915779043"},
+    "rbxassetid://5917459365",
+    "rbxassetid://5918726674",
+    "rbxassetid://5915773155",
 }
 
 -- ============================================================
--- UTILS
+-- TESTAR SE task.wait EXISTE
 -- ============================================================
-local function getRootPart(p) if p and p.Character then return p.Character:FindFirstChild("HumanoidRootPart") end; return nil end
-local function getHumanoid(p) if p and p.Character then return p.Character:FindFirstChildOfClass("Humanoid") end; return nil end
-local function getListaPlayers() local l={}; for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then table.insert(l,p.Name) end end; return l end
-local function getPlayerByName(nome)
-    if not nome or nome=="" then return nil end
-    for _,p in ipairs(Players:GetPlayers()) do if p.Name:lower()==nome:lower() then return p end end
-    for _,p in ipairs(Players:GetPlayers()) do if p.Name:lower():find(nome:lower(),1,true) then return p end end
-    return nil
-end
-local function safeNotify(t,c,d) if Rayfield then pcall(function() Rayfield:Notify({Title=t,Content=c,Duration=d or 3}) end) end end
+local taskOk = pcall(function() task.wait(0) end)
+print("[SIMPLES] task.wait disponivel: " .. tostring(taskOk))
 
 -- ============================================================
--- ANIMACOES
+-- CRIAR CLONE (O MAIS SIMPLES POSSIVEL)
 -- ============================================================
-local function forcarPararTodasTracks()
-    pcall(function()
-        local c=LocalPlayer.Character; if not c then return end
-        local h=c:FindFirstChildOfClass("Humanoid"); if not h then return end
-        local a=h:FindFirstChildOfClass("Animator")
-        if a then for _,t in pairs(a:GetPlayingAnimationTracks()) do pcall(function() t:Stop(0) end) end end
-    end)
-end
-local function pararAnimsMovimento()
-    pcall(function() if animSentadoTrack then animSentadoTrack:Stop(0); animSentadoTrack=nil end end)
-    pcall(function() if animAndarTrack then animAndarTrack:Stop(0); animAndarTrack=nil end end)
-end
-local function pararDanca()
-    pcall(function() if animDancaTrack then animDancaTrack:Stop(0); animDancaTrack:AdjustWeight(0); animDancaTrack:Destroy(); animDancaTrack=nil end end)
-    estaDancando=false; forcarPararTodasTracks()
-end
-local function pararTodasAnimacoes() pararAnimsMovimento(); pararDanca(); forcarPararTodasTracks() end
-local function tocarAnimacao(animId,looped,fadeIn)
-    local c=LocalPlayer.Character; if not c then return nil end
-    local h=c:FindFirstChildOfClass("Humanoid"); if not h then return nil end
-    local a=h:FindFirstChildOfClass("Animator")
-    if not a then a=Instance.new("Animator"); a.Parent=h end
-    local anim=Instance.new("Animation"); anim.AnimationId=animId
-    local track; pcall(function() track=a:LoadAnimation(anim) end)
-    if track then track.Looped=looped or false; track.Priority=Enum.AnimationPriority.Action4; track:Play(fadeIn or 0.2) end
-    return track
-end
-local function iniciarAnimSentado()
-    pcall(function() if animAndarTrack then animAndarTrack:Stop(0); animAndarTrack=nil end end)
-    if not animSentadoTrack then animSentadoTrack=tocarAnimacao(ANIM_SENTADO,true,0.3) end
-end
-local function iniciarAnimAndar()
-    pcall(function() if animSentadoTrack then animSentadoTrack:Stop(0); animSentadoTrack=nil end end)
-    if not animAndarTrack then local ad=ANIMS_ANDAR[animAndarAtual]; if ad then animAndarTrack=tocarAnimacao(ad.id,true,0.3) end end
-end
-local function iniciarDanca(manual)
-    if not manual and dancaCancelada then return end
-    if not manual and not seguindo then return end
-    pararAnimsMovimento()
-    if animDancaTrack then pcall(function() animDancaTrack:Stop(0); animDancaTrack:Destroy() end); animDancaTrack=nil end
-    task.wait(0.1)
-    if not manual and dancaCancelada then return end
-    if not manual and not seguindo then return end
-    local ad=DANCAS[animDancaAtual]; if not ad then return end
-    local c=LocalPlayer.Character; if not c then return end
-    local h=c:FindFirstChildOfClass("Humanoid"); if not h then return end
-    local a=h:FindFirstChildOfClass("Animator")
-    if not a then a=Instance.new("Animator"); a.Parent=h end
-    local anim=Instance.new("Animation"); anim.AnimationId=ad.id
-    local track; pcall(function() track=a:LoadAnimation(anim) end)
-    if track then track.Looped=true; track.Priority=Enum.AnimationPriority.Action4; track:Play(0.1); animDancaTrack=track; estaDancando=true end
-end
-
--- ============================================================
--- HIGHLIGHTS
--- ============================================================
-local function limparHighlightSelecionado()
-    pcall(function() if highlightSelecionado and highlightSelecionado.Parent then highlightSelecionado:Destroy() end; highlightSelecionado=nil end)
-    for _,p in ipairs(Players:GetPlayers()) do pcall(function() if p.Character then local hl=p.Character:FindFirstChild("DELTA_SELECIONADO"); if hl then hl:Destroy() end end end) end
-end
-local function marcarPlayerSelecionado(player)
-    limparHighlightSelecionado()
-    if not player or not player.Character then return end
-    playerSelecionadoNome=player.Name
-    local hl=Instance.new("Highlight"); hl.Name="DELTA_SELECIONADO"; hl.FillTransparency=0.5; hl.FillColor=Color3.fromRGB(0,255,80); hl.OutlineColor=Color3.fromRGB(0,255,80); hl.OutlineTransparency=0; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent=player.Character
-    highlightSelecionado=hl; safeNotify("Selecionado",player.Name)
-end
-local function limparHighlightPerseguidor()
-    pcall(function() if fugirHighlight and fugirHighlight.Parent then fugirHighlight:Destroy() end; fugirHighlight=nil end)
-    for _,p in ipairs(Players:GetPlayers()) do pcall(function() if p.Character then local hl=p.Character:FindFirstChild("DELTA_PERSEGUIDOR"); if hl then hl:Destroy() end end end) end
-end
-local function marcarPerseguidor(player)
-    limparHighlightPerseguidor()
-    if not player or not player.Character then return end
-    local hl=Instance.new("Highlight"); hl.Name="DELTA_PERSEGUIDOR"; hl.FillTransparency=0.3; hl.FillColor=Color3.fromRGB(255,0,0); hl.OutlineColor=Color3.fromRGB(255,50,50); hl.OutlineTransparency=0; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent=player.Character; fugirHighlight=hl
-end
-local function selecionarPlayer(nome)
-    local p=getPlayerByName(nome)
-    if p then marcarPlayerSelecionado(p); playerSelecionadoNome=p.Name; return p
-    else safeNotify("Erro","'"..tostring(nome).."' nao!"); return nil end
-end
-
--- ============================================================
--- SPEED
--- ============================================================
-local function iniciarSpeedLoop()
-    if conexaoSpeed then conexaoSpeed:Disconnect(); conexaoSpeed=nil end
-    conexaoSpeed=RunService.Heartbeat:Connect(function()
-        if speedAtivo and not fugindo then local h=getHumanoid(LocalPlayer); if h then h.WalkSpeed=speedValor end end
-    end)
-end
-local function setSpeed(ativo,valor)
-    speedAtivo=ativo; speedValor=valor
-    if ativo then local h=getHumanoid(LocalPlayer); if h then walkSpeedOriginal=h.WalkSpeed; h.WalkSpeed=valor end; iniciarSpeedLoop()
-    else if conexaoSpeed then conexaoSpeed:Disconnect(); conexaoSpeed=nil end; if not fugindo then local h=getHumanoid(LocalPlayer); if h then h.WalkSpeed=walkSpeedOriginal end end end
-end
-
-local function calcularPath(o,d)
-    local path=PathfindingService:CreatePath({AgentRadius=2,AgentHeight=5,AgentCanJump=true,AgentCanClimb=false,WaypointSpacing=4})
-    local ok=pcall(function() path:ComputeAsync(o,d) end)
-    if ok and path.Status==Enum.PathStatus.Success then return path:GetWaypoints() end
-    return nil
-end
-
--- ============================================================
--- SEGUIR
--- ============================================================
-local function iniciarSeguir(alvo)
-    if not alvo then safeNotify("Erro","Sem player!"); return end
-    if not getRootPart(alvo) then safeNotify("Erro",alvo.Name.." sem char!"); return end
-    if fugindo then fugindo=false; if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir=nil end; limparHighlightPerseguidor() end
-    pararTodasAnimacoes(); limparHighlightSelecionado(); dancaCancelada=false
-    local mh=getHumanoid(LocalPlayer); if mh and not speedAtivo then walkSpeedOriginal=mh.WalkSpeed end
-    playerAlvo=alvo; seguindo=true
-    alvoUltimaPos=nil; alvoParadoTimer=0; alvoEstaParado=false; estaDancando=false; meuPersonagemPerto=false
-    safeNotify("Seguindo!",alvo.Name)
-    if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir=nil end
-    conexaoSeguir=RunService.Heartbeat:Connect(function(dt)
-        if not seguindo or not playerAlvo then if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir=nil end; return end
-        local mr=getRootPart(LocalPlayer); local mh=getHumanoid(LocalPlayer); local tr=getRootPart(playerAlvo)
-        if not mr or not tr or not mh then return end
-        if speedAtivo then mh.WalkSpeed=speedValor end
-        local tv=Vector3.new(0,0,0); pcall(function() tv=tr.AssemblyLinearVelocity or tr.Velocity or Vector3.new(0,0,0) end)
-        local tvh=Vector3.new(tv.X,0,tv.Z).Magnitude
-        local th=playerAlvo.Character and playerAlvo.Character:FindFirstChildOfClass("Humanoid")
-        local tm=th and th.MoveDirection.Magnitude>0.1
-        local parado=(tvh<1) and (not alvoUltimaPos or (Vector3.new(tr.Position.X,0,tr.Position.Z)-Vector3.new(alvoUltimaPos.X,0,alvoUltimaPos.Z)).Magnitude<0.3) and (not tm)
-        if parado then alvoParadoTimer=alvoParadoTimer+dt; if alvoParadoTimer>=alvoParadoThreshold then alvoEstaParado=true end
-        else alvoParadoTimer=0; alvoEstaParado=false end
-        alvoUltimaPos=tr.Position
-        local dist=(mr.Position-tr.Position).Magnitude; meuPersonagemPerto=dist<=(distanciaSeguir+3)
-        if alvoEstaParado and meuPersonagemPerto and dancarAoParar then if not estaDancando then pararAnimsMovimento(); task.spawn(function() iniciarDanca(false) end) end
-        else if estaDancando then pararDanca(); animAndarTrack=nil end end
-        local lookDir=tr.CFrame.LookVector; local posAtras=tr.Position-(lookDir*distanciaSeguir)
-        if not estaDancando then iniciarAnimAndar() end
-        if dist>60 then mr.CFrame=CFrame.new(posAtras,tr.Position)
-        elseif alvoEstaParado and dist<distanciaSeguir+3 then mr.CFrame=CFrame.new(mr.Position,Vector3.new(tr.Position.X,mr.Position.Y,tr.Position.Z))
-        else mh:MoveTo(posAtras) end
-        if modoInvisivel then pcall(function() if LocalPlayer.Character then for _,part in pairs(LocalPlayer.Character:GetDescendants()) do if part:IsA("BasePart") then part.Transparency=1 elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency=1 end end end end) end
-    end)
-end
-local function pararSeguir()
-    local na=playerAlvoNome; seguindo=false; dancaCancelada=true
-    if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir=nil end
-    pararTodasAnimacoes(); estaDancando=false; alvoEstaParado=false; alvoParadoTimer=0; alvoUltimaPos=nil
-    task.spawn(function() for i=1,5 do task.wait(0.1); forcarPararTodasTracks() end end)
-    if not speedAtivo then local mh=getHumanoid(LocalPlayer); if mh then mh.WalkSpeed=walkSpeedOriginal end end
-    if modoInvisivel then pcall(function() if LocalPlayer.Character then for _,part in pairs(LocalPlayer.Character:GetDescendants()) do if part:IsA("BasePart") and part.Name~="HumanoidRootPart" then part.Transparency=0 elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency=0 end end end end) end
-    safeNotify("Parou!","Parou de seguir"..(na and (" "..na) or ""))
-    if playerAlvo then pcall(function() marcarPlayerSelecionado(playerAlvo) end) end; playerAlvo=nil
-end
-local function ativarSelecaoPorToque()
-    if conexaoToque then conexaoToque:Disconnect(); conexaoToque=nil end; selecaoPorToque=true
-    conexaoToque=RunService.Heartbeat:Connect(function(dt)
-        if not selecaoPorToque then if conexaoToque then conexaoToque:Disconnect(); conexaoToque=nil end; return end
-        if toqueCooldownAtivo then toqueCooldownTimer=toqueCooldownTimer-dt; if toqueCooldownTimer<=0 then toqueCooldownAtivo=false; toqueCooldownTimer=0 end; return end
-        if seguindo then return end; local mr=getRootPart(LocalPlayer); if not mr then return end
-        for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then local r=getRootPart(p); if r and (mr.Position-r.Position).Magnitude<5 then safeNotify("Toque!",p.Name); iniciarSeguir(p); break end end end
-    end)
-end
-local function desativarSelecaoPorToque() selecaoPorToque=false; if conexaoToque then conexaoToque:Disconnect(); conexaoToque=nil end end
-local function teleportarParaPlayer(nome)
-    local p=getPlayerByName(nome); if not p then safeNotify("Erro","Nao!"); return end
-    local r=getRootPart(p); local mr=getRootPart(LocalPlayer); if not r or not mr then return end
-    mr.CFrame=CFrame.new(r.Position-(r.CFrame.LookVector*distanciaSeguir),r.Position); safeNotify("TP!",p.Name)
-end
-
--- ============================================================
--- FUGIR
--- ============================================================
-local function desativarFantasma()
-    if not fantasmaAtivo then return end; fantasmaAtivo=false
-    pcall(function() local ch=LocalPlayer.Character; if not ch then return end; for n,w in pairs(fugirCollisionsBackup) do local part=ch:FindFirstChild(n); if part and part:IsA("BasePart") then part.CanCollide=w end end end)
-    fugirCollisionsBackup={}
-end
-local function ativarFantasma()
-    if fantasmaAtivo then return end; fantasmaAtivo=true; fantasmaTimer=FANTASMA_DURACAO; fugirCollisionsBackup={}
-    pcall(function() local ch=LocalPlayer.Character; if not ch then return end; for _,part in pairs(ch:GetDescendants()) do if part:IsA("BasePart") then fugirCollisionsBackup[part.Name]=part.CanCollide; part.CanCollide=false end end end)
-end
-local function iniciarFugir(perseguidor)
-    if not perseguidor then safeNotify("Erro","Selecione!"); return end
-    if seguindo then pararSeguir() end; if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir=nil end
-    playerPerseguidor=perseguidor; playerPerseguidorNome=perseguidor.Name; fugindo=true; inimigoPosAnterior=nil; fantasmaTimer=0; desativarFantasma()
-    marcarPerseguidor(perseguidor); safeNotify("FUGINDO!",perseguidor.Name)
-    conexaoFugir=RunService.Heartbeat:Connect(function(dt)
-        if not fugindo or not playerPerseguidor then if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir=nil end; return end
-        local mr=getRootPart(LocalPlayer); local mh=getHumanoid(LocalPlayer); local ir=getRootPart(playerPerseguidor)
-        if not mr or not ir or not mh then return end
-        local dist=(mr.Position-ir.Position).Magnitude
-        local iv=Vector3.new(0,0,0); if inimigoPosAnterior then iv=(ir.Position-inimigoPosAnterior)/math.max(dt,0.001) end
-        inimigoPosAnterior=ir.Position
-        local speed=16
-        if dist<3 then speed=300 elseif dist<fugirDistanciaMinima then speed=math.clamp(250-dist*20,150,250) elseif dist<15 then speed=math.clamp(150-dist*5,80,150) elseif dist<fugirDistanciaSegura then speed=math.clamp(80-dist,30,80) end
-        mh.WalkSpeed=speed
-        local dir=Vector3.new((mr.Position-ir.Position).X,0,(mr.Position-ir.Position).Z)
-        if dir.Magnitude>0 then dir=dir.Unit else dir=Vector3.new(1,0,0) end
-        if dist<fugirDistanciaSegura then mr.CFrame=CFrame.new(mr.Position+dir*3,mr.Position+dir*3-dir); if dist<10 then mh.Jump=true end end
-    end)
-end
-local function pararFugir()
-    fugindo=false; if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir=nil end; desativarFantasma(); limparHighlightPerseguidor()
-    local h=getHumanoid(LocalPlayer); if h then h.WalkSpeed=speedAtivo and speedValor or walkSpeedOriginal end
-    safeNotify("Parou!","Parou de fugir"); playerPerseguidor=nil
-end
-local function pararTudo()
-    if seguindo then pararSeguir() end; if fugindo then pararFugir() end; if selecaoPorToque then desativarSelecaoPorToque() end
-    setSpeed(false,16); pararTodasAnimacoes()
-    pcall(function() if LocalPlayer.Character then for _,part in pairs(LocalPlayer.Character:GetDescendants()) do if part:IsA("BasePart") and part.Name~="HumanoidRootPart" then part.Transparency=0 elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency=0 end end end end)
-    safeNotify("Parou!","Tudo desativado.")
-end
-local function aplicarTransparencia(t)
-    local function ag(gui) pcall(function() for _,child in pairs(gui:GetDescendants()) do pcall(function()
-        if child:IsA("Frame") or child:IsA("ScrollingFrame") or child:IsA("CanvasGroup") then if not child:GetAttribute("_OBG") then child:SetAttribute("_OBG",child.BackgroundTransparency) end; child.BackgroundTransparency=(child:GetAttribute("_OBG")or 0)+(1-(child:GetAttribute("_OBG")or 0))*t end
-        if child:IsA("ImageLabel") or child:IsA("ImageButton") then if not child:GetAttribute("_OBG") then child:SetAttribute("_OBG",child.BackgroundTransparency) end; if not child:GetAttribute("_OIG") then child:SetAttribute("_OIG",child.ImageTransparency) end; child.BackgroundTransparency=(child:GetAttribute("_OBG")or 0)+(1-(child:GetAttribute("_OBG")or 0))*t; child.ImageTransparency=(child:GetAttribute("_OIG")or 0)+(1-(child:GetAttribute("_OIG")or 0))*t end
-        if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then if not child:GetAttribute("_OBG") then child:SetAttribute("_OBG",child.BackgroundTransparency) end; child.BackgroundTransparency=(child:GetAttribute("_OBG")or 0)+(1-(child:GetAttribute("_OBG")or 0))*t end
-    end) end end) end
-    pcall(function() for _,gui in pairs(game:GetService("CoreGui"):GetChildren()) do if gui:IsA("ScreenGui") then ag(gui) end end end)
-    pcall(function() local pg=LocalPlayer:FindFirstChild("PlayerGui"); if pg then for _,gui in pairs(pg:GetChildren()) do if gui:IsA("ScreenGui") then ag(gui) end end end end)
-    pcall(function() local h=gethui and gethui(); if h then for _,gui in pairs(h:GetChildren()) do if gui:IsA("ScreenGui") then ag(gui) end end end end)
-end
-
--- ============================================================
--- ============================================================
--- CLONES v6.2 - RAPIDO, SEM BLOQUEIO
--- ============================================================
--- ============================================================
-
-local function criarCloneManual(alvoPlayer, indice, totalNovos)
+local function criarClone()
     local t0 = tick()
-    local character = LocalPlayer.Character
-    if not character then addLog("ERRO: Sem char!", "ERRO"); return nil end
-    local meuRoot = character:FindFirstChild("HumanoidRootPart")
-    if not meuRoot then addLog("ERRO: Sem HRP!", "ERRO"); return nil end
+    print("[CLONE] Iniciando criacao...")
 
-    -- Alvo: se não tem alvo, usa o player (seguir você)
-    local alvoRoot = getRootPart(alvoPlayer) or meuRoot
-    local alvoIsMe = (not alvoPlayer) or (alvoPlayer == LocalPlayer) or (alvoRoot == meuRoot)
-
-    -- Cores
-    local bc = character:FindFirstChildOfClass("BodyColors")
-    local sk = bc and bc.HeadColor or Color3.fromRGB(230, 200, 175)
-    local tr_c = bc and bc.TorsoColor or Color3.fromRGB(0, 162, 255)
-    local lg = bc and bc.LeftLegColor or Color3.fromRGB(0, 25, 200)
-    local shirt = character:FindFirstChildOfClass("Shirt")
-    local pants = character:FindFirstChildOfClass("Pants")
+    local char = LocalPlayer.Character
+    if not char then print("[CLONE] ERRO: sem character"); return nil end
+    local myHRP = char:FindFirstChild("HumanoidRootPart")
+    if not myHRP then print("[CLONE] ERRO: sem HRP"); return nil end
 
     cloneContador = cloneContador + 1
-    local cid = cloneContador
+    local id = cloneContador
+    print("[CLONE] #" .. id .. " - Criando Model...")
 
-    -- Criar modelo
+    -- Model
     local model = Instance.new("Model")
-    model.Name = "DeltaClone_" .. cid
+    model.Name = "Clone_" .. id
+    print("[CLONE] #" .. id .. " - Model criado (" .. string.format("%.2f", tick()-t0) .. "s)")
 
-    -- ============================================================
-    -- CRIAR TODAS AS PARTES DE UMA VEZ (sem pcalls desnecessarios)
-    -- ============================================================
-    local parts = {}
-    local function mk(name, size, color, shape)
+    -- Criar parte helper
+    local function P(name, size, color, parent)
         local p = Instance.new("Part")
         p.Name = name
         p.Size = size
-        p.Color = color
+        p.Color = color or Color3.fromRGB(100, 100, 100)
         p.Material = Enum.Material.SmoothPlastic
+        p.Anchored = false
+        p.CanCollide = true
         p.TopSurface = Enum.SurfaceType.Smooth
         p.BottomSurface = Enum.SurfaceType.Smooth
-        p.CanCollide = true
-        p.Anchored = true
-        p.Parent = model
-        if shape then p.Shape = shape end
-        parts[name] = p
+        p.Parent = parent or model
         return p
     end
 
-    local hrp = mk("HumanoidRootPart", Vector3.new(2, 2, 1), Color3.new(0.5, 0.5, 0.5))
-    hrp.Transparency = 1
-    hrp.CanCollide = false
+    -- Cores
+    local SKIN = Color3.fromRGB(230, 200, 175)
+    local BLUE = Color3.fromRGB(0, 122, 255)
+    local DARK = Color3.fromRGB(0, 25, 200)
 
-    mk("LowerTorso", Vector3.new(2, 2, 1), tr_c)
-    mk("UpperTorso", Vector3.new(2, 2, 1), tr_c)
-    mk("Head", Vector3.new(2, 1, 1), sk, Enum.PartType.Ball)
-    mk("RightUpperArm", Vector3.new(1, 2, 1), sk)
-    mk("RightLowerArm", Vector3.new(1, 2, 1), sk)
-    mk("RightHand", Vector3.new(1, 1, 2), sk)
-    mk("LeftUpperArm", Vector3.new(1, 2, 1), sk)
-    mk("LeftLowerArm", Vector3.new(1, 2, 1), sk)
-    mk("LeftHand", Vector3.new(1, 1, 2), sk)
-    mk("RightUpperLeg", Vector3.new(1, 2, 1), lg)
-    mk("RightLowerLeg", Vector3.new(1, 2, 1), lg)
-    mk("RightFoot", Vector3.new(1, 1, 2), lg)
-    mk("LeftUpperLeg", Vector3.new(1, 2, 1), lg)
-    mk("LeftLowerLeg", Vector3.new(1, 2, 1), lg)
-    mk("LeftFoot", Vector3.new(1, 1, 2), lg)
+    -- Criar partes
+    print("[CLONE] #" .. id .. " - Criando partes...")
+    local hrp = P("HumanoidRootPart", Vector3.new(2,2,1), Color3.new(0.5,0.5,0.5))
+    hrp.Transparency = 1; hrp.CanCollide = false
 
-    -- ============================================================
-    -- MOTOR6D JOINTS (sem pcalls - direto)
-    -- ============================================================
-    local function mm(name, p0n, p1n, c0, c1)
-        local p0 = parts[p0n]; local p1 = parts[p1n]
-        if not p0 or not p1 then return end
+    local lt = P("LowerTorso", Vector3.new(2,2,1), BLUE)
+    local ut = P("UpperTorso", Vector3.new(2,2,1), BLUE)
+    local hd = P("Head", Vector3.new(1.2,1,1), SKIN)
+    hd.Shape = Enum.PartType.Ball
+    local rua = P("RightUpperArm", Vector3.new(1,2,1), SKIN)
+    local rla = P("RightLowerArm", Vector3.new(1,2,1), SKIN)
+    local rh = P("RightHand", Vector3.new(1,1,2), SKIN)
+    local lua_ = P("LeftUpperArm", Vector3.new(1,2,1), SKIN)
+    local lla = P("LeftLowerArm", Vector3.new(1,2,1), SKIN)
+    local lh = P("LeftHand", Vector3.new(1,1,2), SKIN)
+    local rul = P("RightUpperLeg", Vector3.new(1,2,1), DARK)
+    local rll = P("RightLowerLeg", Vector3.new(1,2,1), DARK)
+    local rf = P("RightFoot", Vector3.new(1,1,2), DARK)
+    local lul = P("LeftUpperLeg", Vector3.new(1,2,1), DARK)
+    local lll = P("LeftLowerLeg", Vector3.new(1,2,1), DARK)
+    local lf = P("LeftFoot", Vector3.new(1,1,2), DARK)
+
+    print("[CLONE] #" .. id .. " - 15 partes OK (" .. string.format("%.2f", tick()-t0) .. "s)")
+
+    -- Criar Motor6D
+    print("[CLONE] #" .. id .. " - Criando joints...")
+    local function M(name, p0, p1, c0, c1)
         local m = Instance.new("Motor6D")
-        m.Name = name
-        m.Part0 = p0
-        m.Part1 = p1
-        m.C0 = c0
-        m.C1 = c1
-        m.Parent = p1
+        m.Name = name; m.Part0 = p0; m.Part1 = p1; m.C0 = c0; m.C1 = c1; m.Parent = p1
     end
 
-    mm("Root", "HumanoidRootPart", "LowerTorso", CFrame.new(0, 0, 0), CFrame.new(0, -0.5, 0))
-    mm("Waist", "LowerTorso", "UpperTorso", CFrame.new(0, 1, 0), CFrame.new(0, -1, 0))
-    mm("Neck", "UpperTorso", "Head", CFrame.new(0, 1, 0), CFrame.new(0, -0.5, 0))
-    mm("RightShoulder", "UpperTorso", "RightUpperArm", CFrame.new(1.5, 0.5, 0), CFrame.new(-0.5, 0.5, 0))
-    mm("RightElbow", "RightUpperArm", "RightLowerArm", CFrame.new(0, -1, 0), CFrame.new(0, 1, 0))
-    mm("RightWrist", "RightLowerArm", "RightHand", CFrame.new(0, -1, 0), CFrame.new(0, 0.5, 0))
-    mm("LeftShoulder", "UpperTorso", "LeftUpperArm", CFrame.new(-1.5, 0.5, 0), CFrame.new(0.5, 0.5, 0))
-    mm("LeftElbow", "LeftUpperArm", "LeftLowerArm", CFrame.new(0, -1, 0), CFrame.new(0, 1, 0))
-    mm("LeftWrist", "LeftLowerArm", "LeftHand", CFrame.new(0, -1, 0), CFrame.new(0, 0.5, 0))
-    mm("RightHip", "LowerTorso", "RightUpperLeg", CFrame.new(0.5, -1, 0), CFrame.new(0, 1, 0))
-    mm("RightKnee", "RightUpperLeg", "RightLowerLeg", CFrame.new(0, -1, 0), CFrame.new(0, 1, 0))
-    mm("RightAnkle", "RightLowerLeg", "RightFoot", CFrame.new(0, -1, 0), CFrame.new(0, 0.5, 0))
-    mm("LeftHip", "LowerTorso", "LeftUpperLeg", CFrame.new(-0.5, -1, 0), CFrame.new(0, 1, 0))
-    mm("LeftKnee", "LeftUpperLeg", "LeftLowerLeg", CFrame.new(0, -1, 0), CFrame.new(0, 1, 0))
-    mm("LeftAnkle", "LeftLowerLeg", "LeftFoot", CFrame.new(0, -1, 0), CFrame.new(0, 0.5, 0))
+    M("Root", hrp, lt, CFrame.new(0,0,0), CFrame.new(0,-0.5,0))
+    M("Waist", lt, ut, CFrame.new(0,1,0), CFrame.new(0,-1,0))
+    M("Neck", ut, hd, CFrame.new(0,1,0), CFrame.new(0,-0.5,0))
+    M("RS", ut, rua, CFrame.new(1.5,0.5,0), CFrame.new(-0.5,0.5,0))
+    M("RE", rua, rla, CFrame.new(0,-1,0), CFrame.new(0,1,0))
+    M("RW", rla, rh, CFrame.new(0,-1,0), CFrame.new(0,0.5,0))
+    M("LS", ut, lua_, CFrame.new(-1.5,0.5,0), CFrame.new(0.5,0.5,0))
+    M("LE", lua_, lla, CFrame.new(0,-1,0), CFrame.new(0,1,0))
+    M("LW", lla, lh, CFrame.new(0,-1,0), CFrame.new(0,0.5,0))
+    M("RH", lt, rul, CFrame.new(0.5,-1,0), CFrame.new(0,1,0))
+    M("RK", rul, rll, CFrame.new(0,-1,0), CFrame.new(0,1,0))
+    M("RA", rll, rf, CFrame.new(0,-1,0), CFrame.new(0,0.5,0))
+    M("LH", lt, lul, CFrame.new(-0.5,-1,0), CFrame.new(0,1,0))
+    M("LK", lul, lll, CFrame.new(0,-1,0), CFrame.new(0,1,0))
+    M("LA", lll, lf, CFrame.new(0,-1,0), CFrame.new(0,0.5,0))
 
-    -- Humanoid
+    print("[CLONE] #" .. id .. " - 13 joints OK (" .. string.format("%.2f", tick()-t0) .. "s)")
+
+    -- Criar Humanoid
+    print("[CLONE] #" .. id .. " - Criando Humanoid...")
     local hum = Instance.new("Humanoid")
-    hum.MaxHealth = 99999; hum.Health = 99999
+    hum.MaxHealth = 100
+    hum.Health = 100
     hum.WalkSpeed = cloneVelocidade
-    hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-    hum.NameDisplayDistance = 0; hum.HealthDisplayDistance = 0
     hum.BreakJointsOnDeath = false
+    hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    hum.NameDisplayDistance = 0
+    hum.HealthDisplayDistance = 0
     hum.Parent = model
-    hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
-    hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-    hum:ChangeState(Enum.HumanoidStateType.Running)
 
+    -- Tentar desabilitar estados de morte (sem erros)
+    pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false) end)
+    pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false) end)
+
+    print("[CLONE] #" .. id .. " - Humanoid OK (" .. string.format("%.2f", tick()-t0) .. "s)")
+
+    -- Animator
     Instance.new("Animator").Parent = hum
+
+    -- PrimaryPart
     model.PrimaryPart = hrp
 
-    -- Roupa
-    if shirt then pcall(function() shirt:Clone().Parent = model end) end
-    if pants then pcall(function() pants:Clone().Parent = model end) end
+    -- Posicionar no player
+    local pos = myHRP.Position + Vector3.new(3, 0, 0)
+    hrp.CFrame = CFrame.new(pos, myHRP.Position)
 
-    -- ============================================================
-    -- POSICIONAR (SEM RAYCAST - usar Y do player)
-    -- ============================================================
-    local angulo = (indice / math.max(totalNovos, 1)) * math.pi * 2
-    local raio = math.random(5, cloneSpawnRaio)
-
-    if alvoIsMe then
-        -- Posicionar AO REDOR do player
-        local offset = Vector3.new(math.cos(angulo) * cloneDistancia, 0, math.sin(angulo) * cloneDistancia)
-        local pos = Vector3.new(meuRoot.Position.X + offset.X, meuRoot.Position.Y, meuRoot.Position.Z + offset.Z)
-        hrp.CFrame = CFrame.new(pos, Vector3.new(meuRoot.Position.X, pos.Y, meuRoot.Position.Z))
-        addLog("  Clone #" .. cid .. " perto de voce (Y=" .. string.format("%.0f", pos.Y) .. ")", "CLONE")
-    else
-        -- Posicionar perto do alvo
-        local spawnX = meuRoot.Position.X + math.cos(angulo) * raio
-        local spawnZ = meuRoot.Position.Z + math.sin(angulo) * raio
-        local pos = Vector3.new(spawnX, meuRoot.Position.Y, spawnZ)
-        hrp.CFrame = CFrame.new(pos, Vector3.new(alvoRoot.Position.X, pos.Y, alvoRoot.Position.Z))
-        addLog("  Clone #" .. cid .. " spawn (Y=" .. string.format("%.0f", pos.Y) .. ")", "CLONE")
-    end
+    print("[CLONE] #" .. id .. " - Posicionado (" .. string.format("%.2f", tick()-t0) .. "s)")
 
     -- Pasta
     if not clonePasta or not clonePasta.Parent then
         clonePasta = Instance.new("Folder")
-        clonePasta.Name = "DELTA_CLONES"
+        clonePasta.Name = "CLONES"
         clonePasta.Parent = Workspace
     end
 
-    -- Parentar
+    -- PARENTAR (isto faz aparecer no workspace)
     model.Parent = clonePasta
+    print("[CLONE] #" .. id .. " - PARENTADO no Workspace! (" .. string.format("%.2f", tick()-t0) .. "s)")
 
     -- Highlight
     local hl = Instance.new("Highlight")
-    hl.Name = "DeltaCloneHL"
-    hl.FillTransparency = 0.7
     hl.FillColor = Color3.fromRGB(0, 200, 255)
     hl.OutlineColor = Color3.fromRGB(0, 150, 255)
-    hl.OutlineTransparency = 0
+    hl.FillTransparency = 0.7
     hl.Parent = model
 
-    local elapsed = string.format("%.2f", tick() - t0)
-    addLog("  Clone #" .. cid .. " criado em " .. elapsed .. "s", "OK")
-
-    -- ============================================================
-    -- DESANCORAR (async)
-    -- ============================================================
-    local cd = {
-        id = cid, modelo = model, conexao = nil,
-        indiceRoda = 0, alvo = alvoPlayer, alvoIsMe = alvoIsMe,
-        animAndarTrack = nil, animDancaTrack = nil, dancando = false,
-        alvoUltimaPos = nil, alvoParadoTimer = 0, alvoEstaParado = false,
-        prontoPraAndar = false,
-    }
-
-    task.delay(0.5, function()
-        for _, part in pairs(model:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.Anchored = false
-                part.CanCollide = true
-            end
-        end
-        hum:ChangeState(Enum.HumanoidStateType.Running)
-        task.wait(0.3)
-        cd.prontoPraAndar = true
-        addLog("Clone #" .. cid .. " PRONTO!", "OK")
-    end)
-
-    -- Indice na roda
-    local totalAtual = 0
-    for _, c in ipairs(clonesAtivos) do if c.modelo and c.modelo.Parent then totalAtual = totalAtual + 1 end end
-    cd.indiceRoda = totalAtual + 1
-
-    -- ============================================================
-    -- IA LOOP
-    -- ============================================================
-    cd.conexao = RunService.Heartbeat:Connect(function(dt)
-        if not cd.modelo or not cd.modelo.Parent then
-            if cd.conexao then cd.conexao:Disconnect(); cd.conexao = nil end
-            return
-        end
-        local cRoot = cd.modelo:FindFirstChild("HumanoidRootPart")
-        local cHum = cd.modelo:FindFirstChildOfClass("Humanoid")
-        if not cRoot or not cHum then return end
-
-        -- Manter vivo
-        if cHum.Health < cHum.MaxHealth then cHum.Health = cHum.MaxHealth end
-        local state = cHum:GetState()
-        if state == Enum.HumanoidStateType.Dead or state == Enum.HumanoidStateType.Ragdoll then
-            cHum:ChangeState(Enum.HumanoidStateType.Running)
-        end
-
-        if not cd.prontoPraAndar then return end
-
-        -- ============================================================
-        -- SEGUINDO VOCÊ (MoveTo simples)
-        -- ============================================================
-        if cd.alvoIsMe then
-            local meuRoot2 = getRootPart(LocalPlayer)
-            if not meuRoot2 then return end
-
-            local dist = (cRoot.Position - meuRoot2.Position).Magnitude
-            local myIdx = cd.indiceRoda
-            local totalC = 0
-            for _, c in ipairs(clonesAtivos) do if c.modelo and c.modelo.Parent then totalC = totalC + 1 end end
-            if totalC == 0 then totalC = 1 end
-
-            -- Posição circular ao redor do player
-            local angOff = (myIdx / totalC) * math.pi * 2
-            local targetX = meuRoot2.Position.X + math.cos(angOff) * cloneDistancia
-            local targetZ = meuRoot2.Position.Z + math.sin(angOff) * cloneDistancia
-            local targetY = cRoot.Position.Y -- Manter Y atual
-            local targetPos = Vector3.new(targetX, targetY, targetZ)
-
-            cHum.WalkSpeed = cloneVelocidade
-
-            -- Se muito longe, teleportar perto
-            if dist > 50 then
-                cRoot.CFrame = CFrame.new(
-                    Vector3.new(meuRoot2.Position.X + math.cos(angOff) * cloneDistancia, meuRoot2.Position.Y, meuRoot2.Position.Z + math.sin(angOff) * cloneDistancia),
-                    Vector3.new(meuRoot2.Position.X, meuRoot2.Position.Y, meuRoot2.Position.Z)
-                )
-                return
-            end
-
-            -- Usar MoveTo para andar
-            cHum:MoveTo(targetPos)
-
-            -- Olhar para o player
-            local lookPos = Vector3.new(meuRoot2.Position.X, cRoot.Position.Y, meuRoot2.Position.Z)
-            cRoot.CFrame = CFrame.new(cRoot.Position, lookPos)
-
-            -- Dançar quando o player parar
-            local tv = Vector3.new(0,0,0)
-            pcall(function() tv = meuRoot2.AssemblyLinearVelocity or meuRoot2.Velocity or Vector3.new(0,0,0) end)
-            local tvh = Vector3.new(tv.X, 0, tv.Z).Magnitude
-            local th = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            local euMovo = th and th.MoveDirection.Magnitude > 0.1
-            local euParado = tvh < 1 and not euMovo
-
-            if cloneDancar and euParado and dist < cloneDistancia + 5 then
-                if not cd.dancando then
-                    if cd.animAndarTrack then cd.animAndarTrack:Stop(0); cd.animAndarTrack = nil end
-                    -- Parar todas tracks do clone
-                    pcall(function()
-                        local a = cHum:FindFirstChildOfClass("Animator")
-                        if a then for _, t in pairs(a:GetPlayingAnimationTracks()) do t:Stop(0) end end
-                    end)
-                    local dd = DANCAS[animDancaAtual]
-                    if dd then
-                        local anim = Instance.new("Animation"); anim.AnimationId = dd.id
-                        local a = cHum:FindFirstChildOfClass("Animator")
-                        if a then
-                            local tr = a:LoadAnimation(anim)
-                            if tr then
-                                tr.Looped = true; tr.Priority = Enum.AnimationPriority.Action4
-                                tr:Play(0.1); cd.animDancaTrack = tr; cd.dancando = true
-                            end
-                        end
-                    end
-                end
-            else
-                if cd.dancando then
-                    if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy(); cd.animDancaTrack = nil end
-                    cd.dancando = false; cd.animAndarTrack = nil
-                end
-                -- Animação de andar
-                if not cd.animAndarTrack then
-                    local ad = ANIMS_ANDAR[animAndarAtual]
-                    if ad then
-                        local anim = Instance.new("Animation"); anim.AnimationId = ad.id
-                        local a = cHum:FindFirstChildOfClass("Animator")
-                        if a then
-                            local tr = a:LoadAnimation(anim)
-                            if tr then
-                                tr.Looped = true; tr.Priority = Enum.AnimationPriority.Movement
-                                tr:Play(0.3); cd.animAndarTrack = tr
-                            end
-                        end
-                    end
-                end
-            end
-            return
-        end
-
-        -- ============================================================
-        -- SEGUINDO OUTRO PLAYER
-        -- ============================================================
-        local targetAlvo = cd.alvo or cloneAlvo
-        if not targetAlvo then return end
-        local tRoot = getRootPart(targetAlvo); if not tRoot then return end
-        local distancia = (cRoot.Position - tRoot.Position).Magnitude
-
-        local cloneAlvoParou = false
-        if cd.alvoUltimaPos then
-            local tv = Vector3.new(0,0,0)
-            pcall(function() tv = tRoot.AssemblyLinearVelocity or tRoot.Velocity or Vector3.new(0,0,0) end)
-            local dm = (Vector3.new(tRoot.Position.X,0,tRoot.Position.Z) - Vector3.new(cd.alvoUltimaPos.X,0,cd.alvoUltimaPos.Z)).Magnitude
-            if Vector3.new(tv.X,0,tv.Z).Magnitude < 1 and dm < 0.3 then
-                cd.alvoParadoTimer = cd.alvoParadoTimer + dt
-                if cd.alvoParadoTimer >= alvoParadoThreshold then cloneAlvoParou = true end
-            else cd.alvoParadoTimer = 0 end
-        end
-        cd.alvoUltimaPos = tRoot.Position
-
-        if cloneDancar and cloneAlvoParou and distancia < cloneDistancia + 4 then
-            if not cd.dancando then
-                if cd.animAndarTrack then cd.animAndarTrack:Stop(0); cd.animAndarTrack = nil end
-                pcall(function() local a = cHum:FindFirstChildOfClass("Animator"); if a then for _, t in pairs(a:GetPlayingAnimationTracks()) do t:Stop(0) end end end)
-                local dd = DANCAS[animDancaAtual]
-                if dd then
-                    local anim = Instance.new("Animation"); anim.AnimationId = dd.id
-                    local a = cHum:FindFirstChildOfClass("Animator")
-                    if a then local tr = a:LoadAnimation(anim); if tr then tr.Looped=true; tr.Priority=Enum.AnimationPriority.Action4; tr:Play(0.1); cd.animDancaTrack=tr; cd.dancando=true end end
-                end
-            end
-            cRoot.CFrame = CFrame.new(cRoot.Position, Vector3.new(tRoot.Position.X, cRoot.Position.Y, tRoot.Position.Z))
-            return
-        else
-            if cd.dancando then
-                if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy(); cd.animDancaTrack = nil end
-                cd.dancando = false; cd.animAndarTrack = nil
-            end
-        end
-
-        if not cd.animAndarTrack and not cd.dancando then
-            local ad = ANIMS_ANDAR[animAndarAtual]
-            if ad then
-                local anim = Instance.new("Animation"); anim.AnimationId = ad.id
-                local a = cHum:FindFirstChildOfClass("Animator")
-                if a then local tr = a:LoadAnimation(anim); if tr then tr.Looped=true; tr.Priority=Enum.AnimationPriority.Movement; tr:Play(0.3); cd.animAndarTrack=tr end end
-            end
-        end
-
-        cHum.WalkSpeed = cloneVelocidade
-
-        local tc = 0; local mi = 0
-        for _, c in ipairs(clonesAtivos) do if c.modelo and c.modelo.Parent then tc = tc + 1; if c == cd then mi = tc end end end
-        if mi == 0 then mi = 1 end
-        local ao = (mi / math.max(tc, 1)) * math.pi * 2
-        local posNaRoda = tRoot.Position + Vector3.new(math.cos(ao) * cloneDistancia, 0, math.sin(ao) * cloneDistancia)
-
-        if distancia > 80 then
-            cRoot.CFrame = CFrame.new(tRoot.Position + Vector3.new(math.random()-0.5, 5, math.random()-0.5) * 10, tRoot.Position)
-            return
-        end
-        if (cRoot.Position - posNaRoda).Magnitude < 3 then
-            cRoot.CFrame = CFrame.new(cRoot.Position, Vector3.new(tRoot.Position.X, cRoot.Position.Y, tRoot.Position.Z))
-            return
-        end
-
-        cHum:MoveTo(posNaRoda)
-        cRoot.CFrame = CFrame.new(cRoot.Position, Vector3.new(tRoot.Position.X, cRoot.Position.Y, tRoot.Position.Z))
-    end)
-
+    -- Salvar dados
+    local cd = {id=id, model=model, hum=hum, hrp=hrp, dancando=false, pronto=false}
     table.insert(clonesAtivos, cd)
-    addLog("Clone #" .. cid .. " CRIADO! Total: " .. #clonesAtivos .. " (" .. string.format("%.2f", tick()-t0) .. "s total)", "OK")
+
+    -- Desancorar (async)
+    spawn(function()
+        wait(1)
+        pcall(function()
+            for _, part in pairs(model:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.Anchored = false
+                    part.CanCollide = true
+                end
+            end
+        end)
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+        cd.pronto = true
+        print("[CLONE] #" .. id .. " DESANCORADO e PRONTO!")
+    end)
+
+    print("[CLONE] #" .. id .. " CRIADO! Total: " .. #clonesAtivos .. " (" .. string.format("%.2f", tick()-t0) .. "s)")
     return cd
 end
 
-local function removerClone(cd)
-    pcall(function() if cd.conexao then cd.conexao:Disconnect(); cd.conexao=nil end end)
-    pcall(function() if cd.modelo and cd.modelo.Parent then cd.modelo:Destroy() end end)
-end
-local function removerTodosClones()
-    for _,cd in ipairs(clonesAtivos) do removerClone(cd) end; clonesAtivos={}
+-- ============================================================
+-- REMOVER CLONES
+-- ============================================================
+local function removerTodos()
+    for _, cd in ipairs(clonesAtivos) do
+        pcall(function() if cd.model then cd.model:Destroy() end end)
+    end
+    clonesAtivos = {}
     if clonePasta then pcall(function() clonePasta:ClearAllChildren() end) end
-    safeNotify("Clones","Todos removidos!")
+    print("[CLONE] Todos removidos!")
 end
-local function getTotalClonesAtivos()
-    local t=0; for _,cd in ipairs(clonesAtivos) do if cd.modelo and cd.modelo.Parent then t=t+1 end end; return t
-end
-local function adicionarClones(qtd, alvoPlayer)
-    local ta = getTotalClonesAtivos()
-    local who = alvoPlayer and (" -> " .. alvoPlayer.Name) or " (te seguem!)"
-    addLog("=== Criando " .. qtd .. " clones" .. who .. " ===", "CLONE")
-    safeNotify("Clones", "Criando " .. qtd .. "...")
-    task.spawn(function()
-        local criados = 0
-        for i = 1, qtd do
-            if criarCloneManual(alvoPlayer, ta + i, ta + qtd) then criados = criados + 1 end
-            -- Sem delay entre clones - criar todos de uma vez
+
+-- ============================================================
+-- LOOP SEGUINDO (MoveTo)
+-- ============================================================
+local seguindo = false
+local conexaoSeguir = nil
+
+local function iniciarSeguirMe()
+    seguindo = true
+    print("[SEGUIR] Iniciando loop de seguir...")
+    if conexaoSeguir then conexaoSeguir:Disconnect() end
+    conexaoSeguir = RunService.Heartbeat:Connect(function()
+        if not seguindo then
+            if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir = nil end
+            return
         end
-        addLog("=== " .. criados .. "/" .. qtd .. " | Total: " .. getTotalClonesAtivos() .. " ===", "OK")
-        safeNotify("Clones!", criados .. "/" .. qtd .. " | Total: " .. getTotalClonesAtivos())
+        local myChar = LocalPlayer.Character
+        if not myChar then return end
+        local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+        if not myHRP then return end
+
+        for _, cd in ipairs(clonesAtivos) do
+            if cd.model and cd.model.Parent and cd.pronto then
+                local cRoot = cd.model:FindFirstChild("HumanoidRootPart")
+                local cHum = cd.model:FindFirstChildOfClass("Humanoid")
+                if cRoot and cHum then
+                    -- Manter vivo
+                    if cHum.Health < 50 then cHum.Health = 100 end
+
+                    local dist = (cRoot.Position - myHRP.Position).Magnitude
+
+                    -- Posição circular ao redor do player
+                    local idx = 0
+                    local total = 0
+                    for _, c2 in ipairs(clonesAtivos) do
+                        if c2.model and c2.model.Parent then total = total + 1; if c2 == cd then idx = total end end
+                    end
+                    if total == 0 then total = 1 end
+
+                    local ang = (idx / total) * math.pi * 2
+                    local tx = myHRP.Position.X + math.cos(ang) * cloneDistancia
+                    local tz = myHRP.Position.Z + math.sin(ang) * cloneDistancia
+                    local ty = cRoot.Position.Y
+                    local target = Vector3.new(tx, ty, tz)
+
+                    -- Se muito longe, teleportar
+                    if dist > 40 then
+                        cRoot.CFrame = CFrame.new(
+                            Vector3.new(myHRP.Position.X + math.cos(ang)*3, myHRP.Position.Y, myHRP.Position.Z + math.sin(ang)*3),
+                            myHRP.Position
+                        )
+                        return
+                    end
+
+                    -- Usar MoveTo
+                    cHum.WalkSpeed = cloneVelocidade
+                    cHum:MoveTo(target)
+
+                    -- Olhar para o player
+                    pcall(function()
+                        cRoot.CFrame = CFrame.new(cRoot.Position, Vector3.new(myHRP.Position.X, cRoot.Position.Y, myHRP.Position.Z))
+                    end)
+
+                    -- Dançar quando eu parar
+                    local myHum = getHumanoid(LocalPlayer)
+                    local tv = Vector3.new(0,0,0)
+                    pcall(function() tv = myHRP.AssemblyLinearVelocity or myHRP.Velocity or Vector3.new(0,0,0) end)
+                    local euParado = Vector3.new(tv.X,0,tv.Z).Magnitude < 1 and (not myHum or myHum.MoveDirection.Magnitude < 0.1)
+
+                    if cloneDancar and euParado and dist < cloneDistancia + 5 then
+                        if not cd.dancando then
+                            -- Parar animacoes do clone
+                            pcall(function()
+                                local a = cHum:FindFirstChildOfClass("Animator")
+                                if a then for _, t in pairs(a:GetPlayingAnimationTracks()) do t:Stop(0) end end
+                            end)
+                            -- Dançar
+                            pcall(function()
+                                local anim = Instance.new("Animation")
+                                anim.AnimationId = DANCAS[animDancaAtual]
+                                local a = cHum:FindFirstChildOfClass("Animator")
+                                if a then
+                                    local tr = a:LoadAnimation(anim)
+                                    tr.Looped = true
+                                    tr.Priority = Enum.AnimationPriority.Action4
+                                    tr:Play(0.1)
+                                    cd.dancaTrack = tr
+                                    cd.dancando = true
+                                end
+                            end)
+                        end
+                    else
+                        if cd.dancando then
+                            pcall(function() if cd.dancaTrack then cd.dancaTrack:Stop(0); cd.dancaTrack:Destroy() end end)
+                            cd.dancaTrack = nil; cd.dancando = nil
+                        end
+                    end
+                end
+            end
+        end
     end)
 end
-local function redirecionarClones(novoAlvo)
-    if not novoAlvo then return end
-    for _,cd in ipairs(clonesAtivos) do
-        cd.alvo = novoAlvo; cd.alvoIsMe = false
+
+local function pararSeguir()
+    seguindo = false
+    if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir = nil end
+    -- Parar todas danças dos clones
+    for _, cd in ipairs(clonesAtivos) do
+        pcall(function() if cd.dancaTrack then cd.dancaTrack:Stop(0); cd.dancaTrack:Destroy() end end)
+        cd.dancaTrack = nil; cd.dancando = nil
     end
-    cloneAlvo = novoAlvo; cloneAlvoNome = novoAlvo.Name
-    safeNotify("Redirecionados", getTotalClonesAtivos() .. " -> " .. novoAlvo.Name)
 end
 
 -- ============================================================
--- JANELA
+-- GUI
 -- ============================================================
-addLog("Criando janela...", "UI")
-local Window = Rayfield:CreateWindow({Name="Delta v10.6",LoadingTitle="Delta v10.6",LoadingSubtitle="Rapido!",ConfigurationSaving={Enabled=false},Discord={Enabled=false},KeySystem=false})
-if not Window then return end
+local tab = Window:CreateTab("Main", 4483362458)
 
-local function ct(nome,icone) local ok,tab=pcall(function() return Window:CreateTab(nome,icone) end); if ok and tab then return tab end; return nil end
+tab:CreateSection("Clones")
+tab:CreateButton({Name="+1 Clone (te segue)", Callback=function()
+    print("[GUI] +1 Clone")
+    spawn(function() criarClone() end)
+end})
 
--- SEGUIR
-do local tab=ct("Seguir",4483362458) if tab then
-    tab:CreateSection("Player")
-    tab:CreateDropdown({Name="Player",Options=getListaPlayers(),CurrentOption="Nenhum",MultipleOptions=false,Flag="DropSeguir",Callback=function(o) if o and o[1] then local p=getPlayerByName(o[1]); if p then marcarPlayerSelecionado(p) end end end})
-    tab:CreateInput({Name="Nome",PlaceholderText="Nome...",RemoveTextAfterFocusLost=false,Flag="InputPlayer",Callback=function(t) if t and t~="" then selecionarPlayer(t) end end})
-    tab:CreateSection("Modo")
-    tab:CreateDropdown({Name="Modo",Options={"Normal","Pathfinding","Encosto"},CurrentOption="Normal",MultipleOptions=false,Flag="DropModo",Callback=function(o) local m=o[1]; if m=="Encosto" then modoSeguir="encosto" elseif m=="Pathfinding" then modoSeguir="pathfinding" else modoSeguir="normal" end end})
-    tab:CreateButton({Name="SEGUIR",Callback=function() local n=nil; pcall(function() local f=Rayfield.Flags; if f and f.DropSeguir and f.DropSeguir.CurrentOption then local o=f.DropSeguir.CurrentOption; n=type(o)=="table" and o[1] or o end end); if (not n or n=="" or n=="Nenhum") then pcall(function() local f=Rayfield.Flags; if f and f.InputPlayer then local v=f.InputPlayer.CurrentValue; if type(v)=="string" and v~="" then n=v end end end) end; if (not n or n=="" or n=="Nenhum") and playerSelecionadoNome then n=playerSelecionadoNome end; if not n or n=="" or n=="Nenhum" then safeNotify("Erro","Selecione!"); return end; local p=getPlayerByName(n); if p then iniciarSeguir(p) else safeNotify("Erro",n.." nao!") end end})
-    tab:CreateButton({Name="PARAR",Callback=function() if seguindo then pararSeguir() end end})
-    tab:CreateToggle({Name="Seguir ao Encostar",CurrentValue=false,Flag="ToggleToque",Callback=function(v) if v then ativarSelecaoPorToque() else desativarSelecaoPorToque() end end})
-end end
+tab:CreateButton({Name="+3 Clones", Callback=function()
+    print("[GUI] +3 Clones")
+    spawn(function()
+        for i=1,3 do criarClone(); wait(0.1) end
+    end)
+end})
 
--- CLONES
-do local tab=ct("Clones",4483362458) if tab then
-    tab:CreateSection("Alvo (vazio = te seguem!)")
-    tab:CreateDropdown({Name="Alvo",Options=getListaPlayers(),CurrentOption="Nenhum",MultipleOptions=false,Flag="DropCloneAlvo",Callback=function(o) if o and o[1] then local p=getPlayerByName(o[1]); if p then cloneAlvo=p; cloneAlvoNome=p.Name; marcarPlayerSelecionado(p) else cloneAlvo=nil; cloneAlvoNome=nil end else cloneAlvo=nil; cloneAlvoNome=nil end end})
-    tab:CreateInput({Name="Nome",PlaceholderText="Vazio = seguem voce",RemoveTextAfterFocusLost=false,Flag="InputCloneAlvo",Callback=function(t) if t and t~="" then local p=getPlayerByName(t); if p then cloneAlvo=p; cloneAlvoNome=p.Name; selecionarPlayer(t) end else cloneAlvo=nil; cloneAlvoNome=nil end end})
-    tab:CreateParagraph({Title="Info",Content="Sem alvo = clones te seguem como um exercito!"})
-    tab:CreateSection("Criar")
-    tab:CreateButton({Name="+1",Callback=function() adicionarClones(1,cloneAlvo) end})
-    tab:CreateButton({Name="+3",Callback=function() adicionarClones(3,cloneAlvo) end})
-    tab:CreateButton({Name="+5",Callback=function() adicionarClones(5,cloneAlvo) end})
-    tab:CreateButton({Name="+10",Callback=function() adicionarClones(10,cloneAlvo) end})
-    tab:CreateSlider({Name="Qtd",Range={1,50},Increment=1,Suffix="",CurrentValue=5,Flag="SliderCloneQtd",Callback=function() end})
-    tab:CreateButton({Name="Adicionar Qtd Acima",Callback=function() local q=5; pcall(function() local f=Rayfield.Flags; if f and f.SliderCloneQtd then q=math.floor(f.SliderCloneQtd.CurrentValue or 5) end end); adicionarClones(q,cloneAlvo) end})
-    tab:CreateSection("Gerenciar")
-    tab:CreateButton({Name="Redirecionar",Callback=function() if cloneAlvo then redirecionarClones(cloneAlvo) else safeNotify("Info","Sem alvo - te seguem") end end})
-    tab:CreateButton({Name="Remover TODOS",Callback=function() removerTodosClones() end})
-    tab:CreateSection("Config")
-    tab:CreateSlider({Name="Velocidade",Range={10,100},Increment=2,Suffix="",CurrentValue=22,Flag="SliderCloneSpeed",Callback=function(v) cloneVelocidade=v end})
-    tab:CreateSlider({Name="Distancia",Range={2,20},Increment=0.5,Suffix="",CurrentValue=5,Flag="SliderCloneDist",Callback=function(v) cloneDistancia=v end})
-    tab:CreateToggle({Name="Dancam",CurrentValue=true,Flag="ToggleCloneDanca",Callback=function(v) cloneDancar=v end})
-    tab:CreateButton({Name="Qtd Ativos",Callback=function() safeNotify("Clones",getTotalClonesAtivos().." ativos") end})
+tab:CreateButton({Name="+5 Clones", Callback=function()
+    print("[GUI] +5 Clones")
+    spawn(function()
+        for i=1,5 do criarClone(); wait(0.1) end
+    end)
+end})
 
-    tab:CreateSection("Server-Side (visibilidade)")
-    tab:CreateParagraph({Title="Para outros verem",Content="1) Abra server executor 2) Execute este codigo para recriar os clones no servidor"})
-    tab:CreateButton({Name="Copiar Script Server",Callback=function()
-        local code = [[-- Execute no SERVER EXECUTOR para tornar clones visiveis
--- Ele vai recriar os clones no lado do servidor
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local ws = game:GetService("Workspace")
+tab:CreateButton({Name="+10 Clones", Callback=function()
+    print("[GUI] +10 Clones")
+    spawn(function()
+        for i=1,10 do criarClone(); wait(0.1) end
+    end)
+end})
 
--- Ler clones existentes e recriar
-for _, model in pairs(ws:FindFirstChild("DELTA_CLONES") and ws.DELTA_CLONES:GetChildren() or {}) do
-    if model.Name:find("DeltaClone_") then
-        pcall(function()
-            -- Clonar como server-side
-            local newClone = model:Clone()
-            newClone.Name = model.Name .. "_SERVER"
-            newClone.Parent = ws
-            model:Destroy()
-        end)
-    end
-end
-print("[SERVER] Clones recriados como server-side!"]]
-        pcall(function() if setclipboard then setclipboard(code) elseif toclipboard then toclipboard(code) end end)
-        safeNotify("Copiado!","Script copiado - cole no server executor!")
-    end})
-end end
+tab:CreateSlider({
+    Name = "Distancia",
+    Range = {2, 15},
+    Increment = 1,
+    CurrentValue = 5,
+    Flag = "SliderDist",
+    Callback = function(v) cloneDistancia = v end
+})
 
--- FUGIR
-do local tab=ct("Fugir",4483362458) if tab then
-    tab:CreateDropdown({Name="De quem?",Options=getListaPlayers(),CurrentOption="Nenhum",MultipleOptions=false,Flag="DropFugir",Callback=function(o) if o and o[1] then local p=getPlayerByName(o[1]); if p then marcarPlayerSelecionado(p) end end end})
-    tab:CreateInput({Name="Nome",PlaceholderText="...",RemoveTextAfterFocusLost=false,Flag="InputFugir",Callback=function(t) if t and t~="" then selecionarPlayer(t) end end})
-    tab:CreateButton({Name="FUGIR!",Callback=function() local n=nil; pcall(function() local f=Rayfield.Flags; if f and f.DropFugir and f.DropFugir.CurrentOption then local o=f.DropFugir.CurrentOption; n=type(o)=="table" and o[1] or o end end); if (not n or n=="" or n=="Nenhum") and playerSelecionadoNome then n=playerSelecionadoNome end; if n and n~="" then local p=getPlayerByName(n); if p then iniciarFugir(p) end end end})
-    tab:CreateButton({Name="PARAR",Callback=function() if fugindo then pararFugir() end end})
-    tab:CreateSlider({Name="Dist Min",Range={3,20},Increment=1,Suffix="",CurrentValue=8,Flag="SliderDistMin",Callback=function(v) fugirDistanciaMinima=v end})
-    tab:CreateSlider({Name="Dist Seg",Range={15,80},Increment=5,Suffix="",CurrentValue=30,Flag="SliderFugirDist",Callback=function(v) fugirDistanciaSegura=v end})
-end end
+tab:CreateSlider({
+    Name = "Velocidade",
+    Range = {10, 100},
+    Increment = 2,
+    CurrentValue = 22,
+    Flag = "SliderSpeed",
+    Callback = function(v) cloneVelocidade = v end
+})
 
--- ANIM
-do local tab=ct("Anim",4483362458) if tab then
-    local na={}; for _,a in ipairs(ANIMS_ANDAR) do table.insert(na,a.nome) end
-    tab:CreateDropdown({Name="Andar",Options=na,CurrentOption=ANIMS_ANDAR[1].nome,MultipleOptions=false,Flag="DropAndar",Callback=function(o) for i,a in ipairs(ANIMS_ANDAR) do if a.nome==o[1] then animAndarAtual=i; if animAndarTrack then animAndarTrack:Stop(0); animAndarTrack=nil end; break end end end})
-    local nd={}; for _,d in ipairs(DANCAS) do table.insert(nd,d.nome) end
-    tab:CreateDropdown({Name="Danca",Options=nd,CurrentOption=DANCAS[1].nome,MultipleOptions=false,Flag="DropDanca",Callback=function(o) for i,d in ipairs(DANCAS) do if d.nome==o[1] then animDancaAtual=i; break end end end})
-    tab:CreateToggle({Name="Dancar qdo parar",CurrentValue=true,Flag="ToggleDancar",Callback=function(v) dancarAoParar=v end})
-    tab:CreateButton({Name="Dancar!",Callback=function() dancaCancelada=false; task.spawn(function() iniciarDanca(true) end) end})
-    tab:CreateButton({Name="Parar",Callback=function() pararTodasAnimacoes() end})
-end end
+tab:CreateToggle({
+    Name = "Dancam",
+    CurrentValue = true,
+    Callback = function(v) cloneDancar = v end
+})
 
--- CONFIG
-do local tab=ct("Config",4483362458) if tab then
-    tab:CreateSlider({Name="Dist Alvo",Range={1,20},Increment=0.5,Suffix="",CurrentValue=3,Flag="SliderDist",Callback=function(v) distanciaSeguir=v end})
-    tab:CreateToggle({Name="Speed",CurrentValue=false,Flag="ToggleSpeed",Callback=function(v) setSpeed(v,speedValor) end})
-    tab:CreateSlider({Name="Vel",Range={16,200},Increment=2,Suffix="",CurrentValue=50,Flag="SliderSpeed",Callback=function(v) speedValor=v; if speedAtivo then setSpeed(true,v) end end})
-    tab:CreateToggle({Name="Invisivel",CurrentValue=false,Flag="ToggleInvis",Callback=function(v) modoInvisivel=v end})
-    tab:CreateSlider({Name="Transparencia",Range={0,100},Increment=5,Suffix="%",CurrentValue=0,Flag="SliderTransp",Callback=function(v) aplicarTransparencia(v/100) end})
-end end
+tab:CreateSection("Controle")
+tab:CreateButton({Name="Seguir Meu MoveTo", Callback=function()
+    iniciarSeguirMe()
+    Rayfield:Notify({Title="Seguindo", Content="Clones te seguem!", Duration=3})
+end})
 
--- TP
-do local tab=ct("TP",4483362458) if tab then
-    tab:CreateDropdown({Name="Player",Options=getListaPlayers(),CurrentOption="Nenhum",MultipleOptions=false,Flag="DropTP",Callback=function(o) if o[1] then local p=getPlayerByName(o[1]); if p then marcarPlayerSelecionado(p) end end end})
-    tab:CreateInput({Name="Nome",PlaceholderText="...",RemoveTextAfterFocusLost=false,Flag="InputTP",Callback=function(t) if t and t~="" then selecionarPlayer(t) end end})
-    tab:CreateButton({Name="TP",Callback=function() local n=nil; pcall(function() local f=Rayfield.Flags; if f and f.DropTP and f.DropTP.CurrentOption then n=type(f.DropTP.CurrentOption)=="table" and f.DropTP.CurrentOption[1] or f.DropTP.CurrentOption end end); if (not n or n=="" or n=="Nenhum") and playerSelecionadoNome then n=playerSelecionadoNome end; if n and n~="" then teleportarParaPlayer(n) end end})
-    tab:CreateButton({Name="TP+Seguir",Callback=function() local n=nil; pcall(function() local f=Rayfield.Flags; if f and f.DropTP and f.DropTP.CurrentOption then n=type(f.DropTP.CurrentOption)=="table" and f.DropTP.CurrentOption[1] or f.DropTP.CurrentOption end end); if (not n or n=="" or n=="Nenhum") and playerSelecionadoNome then n=playerSelecionadoNome end; if n and n~="" then teleportarParaPlayer(n); task.wait(0.3); local p=getPlayerByName(n); if p then iniciarSeguir(p) end end end})
-end end
+tab:CreateButton({Name="Parar", Callback=function()
+    pararSeguir()
+    Rayfield:Notify({Title="Parou", Content="", Duration=2})
+end})
 
--- GERAL
-do local tab=ct("Geral",4483362458) if tab then
-    tab:CreateButton({Name="PARAR TUDO",Callback=function() removerTodosClones(); pararTudo() end})
-    tab:CreateButton({Name="Atualizar",Callback=function() local l=getListaPlayers(); for _,d in ipairs({"DropSeguir","DropTP","DropFugir","DropCloneAlvo"}) do pcall(function() local f=Rayfield.Flags; if f and f[d] then f[d]:Refresh(l) end end) end; safeNotify("Ok",#l.." players") end})
-end end
+tab:CreateButton({Name="Remover TODOS", Callback=function()
+    pararSeguir()
+    removerTodos()
+    Rayfield:Notify({Title="Removidos", Content="", Duration=2})
+end})
 
--- LOGS
-do local tab=ct("Logs",4483362458) if tab then
-    tab:CreateButton({Name="Copiar",Callback=function() pcall(function() if setclipboard then setclipboard(table.concat(LogBuffer,"\n")) elseif toclipboard then toclipboard(table.concat(LogBuffer,"\n")) end end) end})
-    tab:CreateButton({Name="Limpar",Callback=function() LogBuffer={} end})
-    tab:CreateButton({Name="Ver Ultimos 50",Callback=function()
-        local ini=math.max(1,#LogBuffer-49); local linhas={}; for i=ini,#LogBuffer do table.insert(linhas,LogBuffer[i]) end
-        local texto=table.concat(linhas,"\n"); if texto=="" then texto="(vazio)" end
-        local sg=Instance.new("ScreenGui"); sg.Name="DLog"; sg.ResetOnSpawn=false
-        local ok,par=pcall(function() if gethui then return gethui() end; return game:GetService("CoreGui") end); if not ok then par=LocalPlayer:WaitForChild("PlayerGui") end; sg.Parent=par
-        local fr=Instance.new("Frame"); fr.Size=UDim2.new(0,700,0,500); fr.Position=UDim2.new(0.5,-350,0.5,-250); fr.BackgroundColor3=Color3.fromRGB(15,15,20); fr.BorderSizePixel=0; fr.Parent=sg; Instance.new("UICorner",fr).CornerRadius=UDim.new(0,8)
-        local ti=Instance.new("TextLabel"); ti.Size=UDim2.new(1,0,0,35); ti.BackgroundColor3=Color3.fromRGB(25,25,35); ti.Text=" Logs ("..#linhas..")"; ti.TextColor3=Color3.fromRGB(200,200,220); ti.TextXAlignment=Enum.TextXAlignment.Left; ti.Font=Enum.Font.GothamBold; ti.TextSize=14; ti.Parent=fr
-        local sf=Instance.new("ScrollingFrame"); sf.Size=UDim2.new(1,-20,1,-80); sf.Position=UDim2.new(0,10,0,40); sf.BackgroundTransparency=1; sf.ScrollBarThickness=6; sf.Parent=fr
-        local ll=Instance.new("TextLabel"); ll.Size=UDim2.new(1,-10,0,0); ll.AutomaticSize=Enum.AutomaticSize.Y; ll.BackgroundTransparency=1; ll.Text=texto; ll.TextColor3=Color3.fromRGB(180,255,180); ll.TextXAlignment=Enum.TextXAlignment.Left; ll.TextYAlignment=Enum.TextYAlignment.Top; ll.Font=Enum.Font.Code; ll.TextSize=11; ll.TextWrapped=true; ll.Parent=sf
-        task.defer(function() sf.CanvasSize=UDim2.new(0,0,0,ll.TextBounds.Y+20) end)
-        local cb=Instance.new("TextButton"); cb.Size=UDim2.new(0,100,0,30); cb.Position=UDim2.new(1,-110,1,-38); cb.BackgroundColor3=Color3.fromRGB(0,170,80); cb.Text="Copiar"; cb.TextColor3=Color3.new(1,1,1); cb.Font=Enum.Font.GothamBold; cb.TextSize=13; cb.Parent=fr; Instance.new("UICorner",cb).CornerRadius=UDim.new(0,6)
-        cb.MouseButton1Click:Connect(function() pcall(function() if setclipboard then setclipboard(table.concat(LogBuffer,"\n")) elseif toclipboard then toclipboard(table.concat(LogBuffer,"\n")) end end); cb.Text="OK!" end)
-        local xb=Instance.new("TextButton"); xb.Size=UDim2.new(0,30,0,30); xb.Position=UDim2.new(1,-35,0,5); xb.BackgroundColor3=Color3.fromRGB(180,40,40); xb.Text="X"; xb.TextColor3=Color3.new(1,1,1); xb.Font=Enum.Font.GothamBold; xb.TextSize=14; xb.Parent=fr; Instance.new("UICorner",xb).CornerRadius=UDim.new(0,6)
-        xb.MouseButton1Click:Connect(function() sg:Destroy() end)
-        local dragging,dragInput,dragStart,startPos
-        ti.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=true; dragStart=input.Position; startPos=fr.Position; input.Changed:Connect(function() if input.UserInputState==Enum.UserInputState.End then dragging=false end end) end end)
-        ti.InputChanged:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch then dragInput=input end end)
-        RunService.Heartbeat:Connect(function() if dragging and dragInput then local delta=dragInput.Position-dragStart; fr.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+delta.X,startPos.Y.Scale,startPos.Y.Offset+delta.Y) end end)
-    end})
-end end
+tab:CreateButton({Name="Qtd Ativos", Callback=function()
+    local t = 0
+    for _, cd in ipairs(clonesAtivos) do if cd.model and cd.model.Parent then t = t + 1 end end
+    Rayfield:Notify({Title="Clones", Content=t.." ativos", Duration=3})
+    print("Clones ativos: "..t)
+end})
 
--- EVENTOS
-Players.PlayerRemoving:Connect(function(player)
-    if playerAlvo and playerAlvo==player then pararSeguir() end
-    if playerPerseguidor and playerPerseguidor==player then pararFugir() end
-    if playerSelecionadoNome==player.Name then limparHighlightSelecionado() end
-    if cloneAlvo and cloneAlvo==player then for _,cd in ipairs(clonesAtivos) do cd.alvo=nil; cd.alvoIsMe=true end; cloneAlvo=nil; cloneAlvoNome=nil; safeNotify("Clones","Alvo saiu!") end
-    task.wait(1); local l=getListaPlayers(); for _,d in ipairs({"DropSeguir","DropTP","DropFugir","DropCloneAlvo"}) do pcall(function() local f=Rayfield.Flags; if f and f[d] then f[d]:Refresh(l) end end) end
-end)
-Players.PlayerAdded:Connect(function() task.wait(2); local l=getListaPlayers(); for _,d in ipairs({"DropSeguir","DropTP","DropFugir","DropCloneAlvo"}) do pcall(function() local f=Rayfield.Flags; if f and f[d] then f[d]:Refresh(l) end end) end end)
-LocalPlayer.CharacterAdded:Connect(function()
-    animSentadoTrack=nil; animAndarTrack=nil; animDancaTrack=nil; estaDancando=false; desativarFantasma()
-    if seguindo then task.wait(2); if playerAlvo and getRootPart(playerAlvo) then iniciarSeguir(playerAlvo) else pararSeguir() end end
-    if fugindo then task.wait(2); if playerPerseguidor and getRootPart(playerPerseguidor) then iniciarFugir(playerPerseguidor) else pararFugir() end end
-    if speedAtivo and not fugindo then task.wait(1); local h=getHumanoid(LocalPlayer); if h then h.WalkSpeed=speedValor end end
-end)
-
-addLog("=== DELTA v10.6 PRONTO ===","OK")
-addLog("SEM SetNetworkOwner / SEM tryMakeServerSide (bloqueavam!)","INFO")
-addLog("Sem alvo = clones te seguem com MoveTo","INFO")
-safeNotify("Delta v10.6","Pronto! Rápido agora!")
-print("[DELTA v10.6] Pronto!")
+print("[SIMPLES] PRONTO! Clique em +1 Clone")
+Rayfield:Notify({Title="Delta Clone", Content="Pronto! Clique +1 Clone", Duration=5})
