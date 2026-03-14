@@ -1,16 +1,18 @@
 -- ============================================================
--- MOD MENU DELTA v10.1 - CORRECAO DO PAINEL + DIAGNOSTICO
--- CORRECOES v10.1:
+-- MOD MENU DELTA v10.2 - TODAS AS CORRECOES APLICADAS
+-- CORRECOES v10.2:
+--   - Fallback de URLs para carregar Rayfield
+--   - CurrentOption como TABELA em todos os Dropdowns
+--   - "Nenhum" adicionado na lista de Options dos dropdowns
+--   - pcall individual em cada elemento UI
+--   - task.wait() entre criacao de abas
+--   - Callbacks normalizados (tabela ou string)
+--   - Refresh com fallback Set/Refresh
 --   - Diagnostico detalhado se Rayfield falhar
---   - Window validada antes de criar abas
---   - Dropdowns com CurrentOption como string (nao array)
---   - forcarPararTodasTracks corrigida
---   - Verificacao de character antes de executar
---   - Error logging visivel no console
 -- ============================================================
 
 print("========================================")
-print("[DELTA v10.1] Iniciando carregamento...")
+print("[DELTA v10.2] Iniciando carregamento...")
 print("========================================")
 
 -- ============================================================
@@ -26,6 +28,7 @@ local function addLog(msg, tipo)
     local entry = "[" .. timeStr .. "] [" .. tipo .. "] " .. tostring(msg)
     table.insert(LogBuffer, entry)
     if #LogBuffer > MAX_LOGS then table.remove(LogBuffer, 1) end
+    print(entry)
     if logLabelRef and logLabelRef.Parent then
         pcall(function()
             logLabelRef.Text = table.concat(LogBuffer, "\n")
@@ -40,7 +43,7 @@ local function addLog(msg, tipo)
 end
 
 -- ============================================================
--- SERVICOS (carregar antes de tudo)
+-- SERVICOS
 -- ============================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -55,7 +58,7 @@ addLog("LocalPlayer: " .. tostring(LocalPlayer and LocalPlayer.Name or "DESCONHE
 -- AGUARDAR CHARACTER PRONTO
 -- ============================================================
 local function waitForCharacter()
-    local timeout = 10
+    local timeout = 15
     local elapsed = 0
     while elapsed < timeout do
         if LocalPlayer.Character then
@@ -69,62 +72,67 @@ local function waitForCharacter()
         task.wait(0.5)
         elapsed = elapsed + 0.5
     end
-    addLog("AVISO: Character nao carregou completamente, continuando mesmo assim...", "WARN")
+    addLog("AVISO: Character nao carregou completamente, continuando...", "WARN")
     return false
 end
 
 waitForCharacter()
 
 -- ============================================================
--- CARREGAR RAYFIELD COM DIAGNOSTICO
+-- CARREGAR RAYFIELD COM FALLBACK DE URLs
 -- ============================================================
 local Rayfield = nil
 local RayfieldLoadTime = 0
 
 do
-    addLog("Baixando Rayfield...", "INFO")
-    local startTime = tick()
-    
-    local ok, result = pcall(function()
-        return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-    end)
-    
-    RayfieldLoadTime = tick() - startTime
-    
-    if not ok then
-        addLog("ERRO CRITICO ao baixar Rayfield: " .. tostring(result), "ERRO")
-        addLog("Possivel causa: Exploit sem suporte a HttpGet ou site bloqueado", "ERRO")
-        -- Mostrar notificacao basica como fallback
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title = "Delta v10.1 - ERRO",
-                Text = "Falha ao carregar Rayfield: " .. tostring(result),
-                Duration = 10
-            })
-        end)
-        return
-    end
-    
-    if not result then
-        addLog("ERRO CRITICO: Rayfield retornou nil!", "ERRO")
-        addLog("Possivel causa: API do Rayfield mudou ou resposta invalida", "ERRO")
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title = "Delta v10.1 - ERRO",
-                Text = "Rayfield retornou nil - API pode ter mudado",
-                Duration = 10
-            })
-        end)
-        return
-    end
-    
-    Rayfield = result
-    addLog("Rayfield carregado em " .. string.format("%.2f", RayfieldLoadTime) .. "s", "OK")
-end
+    local urls = {
+        'https://sirius.menu/rayfield',
+        'https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua',
+    }
 
-if not Rayfield then
-    addLog("FALHA: Nao foi possivel continuar sem Rayfield", "ERRO")
-    return
+    for idx, url in ipairs(urls) do
+        addLog("Tentando URL " .. idx .. ": " .. url, "INFO")
+        local startTime = tick()
+
+        local httpOk, httpResult = pcall(function()
+            return game:HttpGet(url)
+        end)
+
+        if not httpOk then
+            addLog("HttpGet falhou na URL " .. idx .. ": " .. tostring(httpResult), "WARN")
+        else
+            if not httpResult or #httpResult < 100 then
+                addLog("Resposta muito curta na URL " .. idx .. " (" .. tostring(httpResult and #httpResult or 0) .. " bytes)", "WARN")
+            else
+                addLog("HttpGet OK! " .. #httpResult .. " bytes", "OK")
+                local loadOk, loadResult = pcall(function()
+                    return loadstring(httpResult)()
+                end)
+
+                RayfieldLoadTime = tick() - startTime
+
+                if loadOk and loadResult then
+                    Rayfield = loadResult
+                    addLog("Rayfield carregado da URL " .. idx .. " em " .. string.format("%.2f", RayfieldLoadTime) .. "s", "OK")
+                    break
+                else
+                    addLog("loadstring falhou na URL " .. idx .. ": " .. tostring(loadResult), "WARN")
+                end
+            end
+        end
+    end
+
+    if not Rayfield then
+        addLog("ERRO CRITICO: Nenhuma URL funcionou para carregar Rayfield!", "ERRO")
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "Delta v10.2 - ERRO",
+                Text = "Falha ao carregar Rayfield - Verifique sua internet/executor",
+                Duration = 15
+            })
+        end)
+        return
+    end
 end
 
 -- ============================================================
@@ -132,10 +140,9 @@ end
 -- ============================================================
 if not Rayfield.CreateWindow then
     addLog("ERRO: Rayfield.CreateWindow nao existe!", "ERRO")
-    addLog("API do Rayfield pode ter mudado", "ERRO")
     pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "Delta v10.1 - ERRO",
+            Title = "Delta v10.2 - ERRO",
             Text = "Rayfield API incompativel - CreateWindow nao encontrado",
             Duration = 10
         })
@@ -275,6 +282,7 @@ local function getHumanoid(player)
     return nil
 end
 
+-- CORRECAO: Lista com "Nenhum" incluido
 local function getListaPlayers()
     local lista = {}
     for _, player in ipairs(Players:GetPlayers()) do
@@ -285,8 +293,18 @@ local function getListaPlayers()
     return lista
 end
 
+local function getListaPlayersComNenhum()
+    local lista = {"Nenhum"}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            table.insert(lista, player.Name)
+        end
+    end
+    return lista
+end
+
 local function getPlayerByName(nome)
-    if not nome or nome == "" then return nil end
+    if not nome or nome == "" or nome == "Nenhum" then return nil end
     for _, player in ipairs(Players:GetPlayers()) do
         if player.Name:lower() == nome:lower() then return player end
     end
@@ -296,8 +314,15 @@ local function getPlayerByName(nome)
     return nil
 end
 
+-- CORRECAO: Normalizar valor de callback (tabela ou string)
+local function getDropdownValue(o)
+    if type(o) == "table" then return o[1] end
+    if type(o) == "string" then return o end
+    return nil
+end
+
 -- ============================================================
--- ANIMACOES (CORRIGIDO)
+-- ANIMACOES
 -- ============================================================
 local function forcarPararTodasTracks()
     pcall(function()
@@ -503,7 +528,7 @@ local function selecionarPlayer(nome)
 end
 
 -- ============================================================
--- NOTIFICACAO SEGURA (evita erros se Rayfield falhar)
+-- NOTIFICACAO SEGURA
 -- ============================================================
 local function safeNotify(title, content, duration)
     if Rayfield then
@@ -1119,7 +1144,7 @@ local function pararTudo()
 end
 
 -- ============================================================
--- SISTEMA DE CLONES v4.1 - CORRIGIDO
+-- SISTEMA DE CLONES v4.1
 -- ============================================================
 local function acharChao(posXZ, posYRef)
     local posY = posYRef or 100
@@ -1198,19 +1223,15 @@ local function criarCloneManual(alvoPlayer, indice, totalNovos)
             local newPart = copiarParte(obj, cloneModel)
             partsMap[obj.Name] = newPart
             if obj.Name == "HumanoidRootPart" then hasHRP = true end
-
         elseif obj:IsA("Accessory") then
             copiarAcessorio(obj, cloneModel)
-
         elseif obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") then
             pcall(function() local c = obj:Clone(); c.Parent = cloneModel end)
-
         elseif obj:IsA("BodyColors") then
             pcall(function() local c = obj:Clone(); c.Parent = cloneModel end)
         end
     end
 
-    -- Copiar decals do face (apenas uma vez)
     for _, decal in pairs(character:GetDescendants()) do
         if decal:IsA("Decal") and decal.Parent and decal.Parent:IsA("BasePart") then
             local parentClone = partsMap[decal.Parent.Name]
@@ -1419,10 +1440,10 @@ local function criarCloneManual(alvoPlayer, indice, totalNovos)
                 if dancaData then
                     local anim = Instance.new("Animation")
                     anim.AnimationId = dancaData.id
-                    local animator = cHumNow:FindFirstChildOfClass("Animator")
-                    if animator then
-                        local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
-                        if ok and track then
+                    local animatorC = cHumNow:FindFirstChildOfClass("Animator")
+                    if animatorC then
+                        local ok2, track = pcall(function() return animatorC:LoadAnimation(anim) end)
+                        if ok2 and track then
                             track.Looped = true
                             track.Priority = Enum.AnimationPriority.Action4
                             track:Play(0.1)
@@ -1452,10 +1473,10 @@ local function criarCloneManual(alvoPlayer, indice, totalNovos)
             if andarData then
                 local anim = Instance.new("Animation")
                 anim.AnimationId = andarData.id
-                local animator = cHumNow:FindFirstChildOfClass("Animator")
-                if animator then
-                    local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
-                    if ok and track then
+                local animatorC = cHumNow:FindFirstChildOfClass("Animator")
+                if animatorC then
+                    local ok2, track = pcall(function() return animatorC:LoadAnimation(anim) end)
+                    if ok2 and track then
                         track.Looped = true
                         track.Priority = Enum.AnimationPriority.Movement
                         track:Play(0.3)
@@ -1613,42 +1634,70 @@ local function redirecionarClones(novoAlvo)
 end
 
 -- ============================================================
+-- FUNCAO PARA ATUALIZAR DROPDOWNS
 -- ============================================================
--- CRIACAO DA JANELA E ABAS (CORRIGIDO)
+local function atualizarDropdowns()
+    local lista = getListaPlayersComNenhum()
+    for _, d in ipairs({"DropSeguir", "DropTP", "DropFugir", "DropCloneAlvo"}) do
+        pcall(function()
+            local f = Rayfield.Flags
+            if f and f[d] then
+                if f[d].Set then
+                    f[d]:Set(lista)
+                elseif f[d].Refresh then
+                    f[d]:Refresh(lista)
+                end
+            end
+        end)
+    end
+end
+
 -- ============================================================
+-- CRIACAO DA JANELA E ABAS (CORRIGIDO v10.2)
 -- ============================================================
 
 addLog("Criando janela...", "UI")
 
-local Window = Rayfield:CreateWindow({
-    Name = "Delta v10.1",
-    LoadingTitle = "Delta v10.1",
-    LoadingSubtitle = "Correcao total + Diagnostico",
-    ConfigurationSaving = {Enabled = false},
-    Discord = {Enabled = false},
-    KeySystem = false,
-})
+local Window = nil
+local windowOk, windowErr = pcall(function()
+    Window = Rayfield:CreateWindow({
+        Name = "Delta v10.2",
+        LoadingTitle = "Delta v10.2",
+        LoadingSubtitle = "Todas as correcoes aplicadas",
+        ConfigurationSaving = {Enabled = false},
+        Discord = {Enabled = false},
+        KeySystem = false,
+    })
+end)
+
+if not windowOk then
+    addLog("ERRO CRITICO ao criar janela: " .. tostring(windowErr), "ERRO")
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Delta v10.2 - ERRO",
+            Text = "Falha ao criar janela: " .. tostring(windowErr),
+            Duration = 10
+        })
+    end)
+    return
+end
 
 if not Window then
     addLog("ERRO CRITICO: CreateWindow retornou nil!", "ERRO")
-    addLog("Rayfield pode estar com problemas", "ERRO")
-    safeNotify("Erro", "Falha ao criar janela - Rayfield com problema")
     return
 end
 
 addLog("Janela criada com sucesso!", "OK")
 
--- Validar metodos essenciais da janela
 if not Window.CreateTab then
     addLog("ERRO: Window.CreateTab nao existe!", "ERRO")
-    safeNotify("Erro", "API da janela incompleta")
     return
 end
 
 addLog("API da janela validada", "OK")
 
 -- ============================================================
--- FUNCAO AUXILIAR PARA CRIAR TAB COM DIAGNOSTICO
+-- FUNCAO AUXILIAR PARA CRIAR TAB
 -- ============================================================
 local function criarTabSegura(nome, icone)
     local ok, tab = pcall(function() return Window:CreateTab(nome, icone) end)
@@ -1667,95 +1716,119 @@ end
 do
     local tab = criarTabSegura("Seguir", 4483362458)
     if tab then
-        tab:CreateSection("Selecionar Player")
-        tab:CreateDropdown({
-            Name = "Escolher Player",
-            Options = getListaPlayers(),
-            CurrentOption = "Nenhum",
-            MultipleOptions = false,
-            Flag = "DropSeguir",
-            Callback = function(o)
-                if o and o[1] then
-                    local p = getPlayerByName(o[1])
-                    if p then marcarPlayerSelecionado(p) end
-                end
-            end,
-        })
-        tab:CreateInput({
-            Name = "Digitar Nome",
-            PlaceholderText = "Nome do player...",
-            RemoveTextAfterFocusLost = false,
-            Flag = "InputPlayer",
-            Callback = function(t)
-                if t and t ~= "" then selecionarPlayer(t) end
-            end,
-        })
-        tab:CreateSection("Modo de Seguir")
-        tab:CreateDropdown({
-            Name = "Modo",
-            Options = {"Normal (Andar)", "Pathfinding (Andar)", "Encosto (Sentado)"},
-            CurrentOption = "Normal (Andar)",
-            MultipleOptions = false,
-            Flag = "DropModo",
-            Callback = function(o)
-                local modo = o[1]
-                if modo == "Encosto (Sentado)" then modoSeguir = "encosto"
-                elseif modo == "Pathfinding (Andar)" then modoSeguir = "pathfinding"
-                else modoSeguir = "normal" end
-            end,
-        })
-        tab:CreateSection("Acoes")
-        tab:CreateButton({
-            Name = "SEGUIR",
-            Callback = function()
-                local nome = nil
-                pcall(function()
-                    local f = Rayfield.Flags
-                    if f and f.DropSeguir and f.DropSeguir.CurrentOption then
-                        local opt = f.DropSeguir.CurrentOption
-                        nome = type(opt) == "table" and opt[1] or opt
+        pcall(function() tab:CreateSection("Selecionar Player") end)
+
+        pcall(function()
+            tab:CreateDropdown({
+                Name = "Escolher Player",
+                Options = getListaPlayersComNenhum(),
+                CurrentOption = {"Nenhum"},
+                MultipleOptions = false,
+                Flag = "DropSeguir",
+                Callback = function(o)
+                    local valor = getDropdownValue(o)
+                    if valor and valor ~= "Nenhum" then
+                        local p = getPlayerByName(valor)
+                        if p then marcarPlayerSelecionado(p) end
                     end
-                end)
-                if (not nome or nome == "" or nome == "Nenhum") then
+                end,
+            })
+        end)
+
+        pcall(function()
+            tab:CreateInput({
+                Name = "Digitar Nome",
+                PlaceholderText = "Nome do player...",
+                RemoveTextAfterFocusLost = false,
+                Flag = "InputPlayer",
+                Callback = function(t)
+                    if t and t ~= "" then selecionarPlayer(t) end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSection("Modo de Seguir") end)
+
+        pcall(function()
+            tab:CreateDropdown({
+                Name = "Modo",
+                Options = {"Normal (Andar)", "Pathfinding (Andar)", "Encosto (Sentado)"},
+                CurrentOption = {"Normal (Andar)"},
+                MultipleOptions = false,
+                Flag = "DropModo",
+                Callback = function(o)
+                    local modo = getDropdownValue(o)
+                    if modo == "Encosto (Sentado)" then modoSeguir = "encosto"
+                    elseif modo == "Pathfinding (Andar)" then modoSeguir = "pathfinding"
+                    else modoSeguir = "normal" end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSection("Acoes") end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "SEGUIR",
+                Callback = function()
+                    local nome = nil
                     pcall(function()
                         local f = Rayfield.Flags
-                        if f and f.InputPlayer then
-                            local v = f.InputPlayer.CurrentValue or f.InputPlayer
-                            if type(v) == "string" and v ~= "" then nome = v end
+                        if f and f.DropSeguir and f.DropSeguir.CurrentOption then
+                            local opt = f.DropSeguir.CurrentOption
+                            nome = type(opt) == "table" and opt[1] or opt
                         end
                     end)
-                end
-                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
-                    nome = playerSelecionadoNome
-                end
-                if not nome or nome == "" or nome == "Nenhum" then
-                    safeNotify("Erro", "Selecione um player!")
-                    return
-                end
-                local p = getPlayerByName(nome)
-                if p then iniciarSeguir(p)
-                else safeNotify("Erro", nome .. " nao encontrado!") end
-            end,
-        })
-        tab:CreateButton({
-            Name = "PARAR",
-            Callback = function()
-                if seguindo then pararSeguir()
-                else safeNotify("Info", "Nao esta seguindo!") end
-            end,
-        })
-        tab:CreateSection("Extras")
-        tab:CreateToggle({
-            Name = "Seguir ao Encostar",
-            CurrentValue = false,
-            Flag = "ToggleToque",
-            Callback = function(v)
-                if v then ativarSelecaoPorToque()
-                else desativarSelecaoPorToque() end
-            end,
-        })
+                    if (not nome or nome == "" or nome == "Nenhum") then
+                        pcall(function()
+                            local f = Rayfield.Flags
+                            if f and f.InputPlayer then
+                                local v = f.InputPlayer.CurrentValue or f.InputPlayer
+                                if type(v) == "string" and v ~= "" then nome = v end
+                            end
+                        end)
+                    end
+                    if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                        nome = playerSelecionadoNome
+                    end
+                    if not nome or nome == "" or nome == "Nenhum" then
+                        safeNotify("Erro", "Selecione um player!")
+                        return
+                    end
+                    local p = getPlayerByName(nome)
+                    if p then iniciarSeguir(p)
+                    else safeNotify("Erro", nome .. " nao encontrado!") end
+                end,
+            })
+        end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "PARAR",
+                Callback = function()
+                    if seguindo then pararSeguir()
+                    else safeNotify("Info", "Nao esta seguindo!") end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSection("Extras") end)
+
+        pcall(function()
+            tab:CreateToggle({
+                Name = "Seguir ao Encostar",
+                CurrentValue = false,
+                Flag = "ToggleToque",
+                Callback = function(v)
+                    if v then ativarSelecaoPorToque()
+                    else desativarSelecaoPorToque() end
+                end,
+            })
+        end)
     end
 end
+
+task.wait(0.1)
 
 -- ============================================================
 -- ABA CLONES
@@ -1763,36 +1836,41 @@ end
 do
     local tab = criarTabSegura("Clones", 4483362458)
     if tab then
-        tab:CreateSection("Alvo dos Clones")
+        pcall(function() tab:CreateSection("Alvo dos Clones") end)
 
-        tab:CreateDropdown({
-            Name = "Alvo",
-            Options = getListaPlayers(),
-            CurrentOption = "Nenhum",
-            MultipleOptions = false,
-            Flag = "DropCloneAlvo",
-            Callback = function(o)
-                if o and o[1] then
-                    local p = getPlayerByName(o[1])
-                    if p then cloneAlvo = p; cloneAlvoNome = p.Name; marcarPlayerSelecionado(p) end
-                end
-            end,
-        })
+        pcall(function()
+            tab:CreateDropdown({
+                Name = "Alvo",
+                Options = getListaPlayersComNenhum(),
+                CurrentOption = {"Nenhum"},
+                MultipleOptions = false,
+                Flag = "DropCloneAlvo",
+                Callback = function(o)
+                    local valor = getDropdownValue(o)
+                    if valor and valor ~= "Nenhum" then
+                        local p = getPlayerByName(valor)
+                        if p then cloneAlvo = p; cloneAlvoNome = p.Name; marcarPlayerSelecionado(p) end
+                    end
+                end,
+            })
+        end)
 
-        tab:CreateInput({
-            Name = "Digitar Nome",
-            PlaceholderText = "Nome do alvo...",
-            RemoveTextAfterFocusLost = false,
-            Flag = "InputCloneAlvo",
-            Callback = function(t)
-                if t and t ~= "" then
-                    local p = getPlayerByName(t)
-                    if p then cloneAlvo = p; cloneAlvoNome = p.Name; selecionarPlayer(t) end
-                end
-            end,
-        })
+        pcall(function()
+            tab:CreateInput({
+                Name = "Digitar Nome",
+                PlaceholderText = "Nome do alvo...",
+                RemoveTextAfterFocusLost = false,
+                Flag = "InputCloneAlvo",
+                Callback = function(t)
+                    if t and t ~= "" then
+                        local p = getPlayerByName(t)
+                        if p then cloneAlvo = p; cloneAlvoNome = p.Name; selecionarPlayer(t) end
+                    end
+                end,
+            })
+        end)
 
-        tab:CreateSection("Adicionar Clones")
+        pcall(function() tab:CreateSection("Adicionar Clones") end)
 
         local function getCloneAlvo()
             local a = cloneAlvo
@@ -1801,147 +1879,176 @@ do
             return a
         end
 
-        tab:CreateButton({
-            Name = "+1 Clone",
-            Callback = function()
-                local a = getCloneAlvo()
-                if a then adicionarClones(1, a)
-                else safeNotify("Erro", "Selecione alvo!") end
-            end
-        })
+        pcall(function()
+            tab:CreateButton({
+                Name = "+1 Clone",
+                Callback = function()
+                    local a = getCloneAlvo()
+                    if a then adicionarClones(1, a)
+                    else safeNotify("Erro", "Selecione alvo!") end
+                end
+            })
+        end)
 
-        tab:CreateButton({
-            Name = "+3 Clones",
-            Callback = function()
-                local a = getCloneAlvo()
-                if a then adicionarClones(3, a)
-                else safeNotify("Erro", "Selecione alvo!") end
-            end
-        })
+        pcall(function()
+            tab:CreateButton({
+                Name = "+3 Clones",
+                Callback = function()
+                    local a = getCloneAlvo()
+                    if a then adicionarClones(3, a)
+                    else safeNotify("Erro", "Selecione alvo!") end
+                end
+            })
+        end)
 
-        tab:CreateButton({
-            Name = "+5 Clones",
-            Callback = function()
-                local a = getCloneAlvo()
-                if a then adicionarClones(5, a)
-                else safeNotify("Erro", "Selecione alvo!") end
-            end
-        })
+        pcall(function()
+            tab:CreateButton({
+                Name = "+5 Clones",
+                Callback = function()
+                    local a = getCloneAlvo()
+                    if a then adicionarClones(5, a)
+                    else safeNotify("Erro", "Selecione alvo!") end
+                end
+            })
+        end)
 
-        tab:CreateButton({
-            Name = "+10 Clones",
-            Callback = function()
-                local a = getCloneAlvo()
-                if a then adicionarClones(10, a)
-                else safeNotify("Erro", "Selecione alvo!") end
-            end
-        })
+        pcall(function()
+            tab:CreateButton({
+                Name = "+10 Clones",
+                Callback = function()
+                    local a = getCloneAlvo()
+                    if a then adicionarClones(10, a)
+                    else safeNotify("Erro", "Selecione alvo!") end
+                end
+            })
+        end)
 
-        tab:CreateSlider({
-            Name = "Quantidade Custom",
-            Range = {1, 50},
-            Increment = 1,
-            Suffix = " clones",
-            CurrentValue = 5,
-            Flag = "SliderCloneQtd",
-            Callback = function() end,
-        })
+        pcall(function()
+            tab:CreateSlider({
+                Name = "Quantidade Custom",
+                Range = {1, 50},
+                Increment = 1,
+                Suffix = " clones",
+                CurrentValue = 5,
+                Flag = "SliderCloneQtd",
+                Callback = function() end,
+            })
+        end)
 
-        tab:CreateButton({
-            Name = "Adicionar (qtd acima)",
-            Callback = function()
-                local a = getCloneAlvo()
-                if not a then safeNotify("Erro", "Selecione alvo!"); return end
-                local qtd = 5
-                pcall(function()
-                    local f = Rayfield.Flags
-                    if f and f.SliderCloneQtd then
-                        local v = f.SliderCloneQtd.CurrentValue or f.SliderCloneQtd
-                        if type(v) == "number" then qtd = math.floor(v) end
-                    end
-                end)
-                adicionarClones(qtd, a)
-            end,
-        })
+        pcall(function()
+            tab:CreateButton({
+                Name = "Adicionar (qtd acima)",
+                Callback = function()
+                    local a = getCloneAlvo()
+                    if not a then safeNotify("Erro", "Selecione alvo!"); return end
+                    local qtd = 5
+                    pcall(function()
+                        local f = Rayfield.Flags
+                        if f and f.SliderCloneQtd then
+                            local v = f.SliderCloneQtd.CurrentValue or f.SliderCloneQtd
+                            if type(v) == "number" then qtd = math.floor(v) end
+                        end
+                    end)
+                    adicionarClones(qtd, a)
+                end,
+            })
+        end)
 
-        tab:CreateSection("Gerenciar")
+        pcall(function() tab:CreateSection("Gerenciar") end)
 
-        tab:CreateButton({
-            Name = "Redirecionar Clones",
-            Callback = function()
-                local a = getCloneAlvo()
-                if a then redirecionarClones(a)
-                else safeNotify("Erro", "Selecione alvo!") end
-            end,
-        })
+        pcall(function()
+            tab:CreateButton({
+                Name = "Redirecionar Clones",
+                Callback = function()
+                    local a = getCloneAlvo()
+                    if a then redirecionarClones(a)
+                    else safeNotify("Erro", "Selecione alvo!") end
+                end,
+            })
+        end)
 
-        tab:CreateButton({
-            Name = "Remover TODOS",
-            Callback = function() removerTodosClones() end
-        })
+        pcall(function()
+            tab:CreateButton({
+                Name = "Remover TODOS",
+                Callback = function() removerTodosClones() end
+            })
+        end)
 
-        tab:CreateSection("Config Clones")
+        pcall(function() tab:CreateSection("Config Clones") end)
 
-        tab:CreateSlider({
-            Name = "Velocidade",
-            Range = {10, 100},
-            Increment = 2,
-            Suffix = " speed",
-            CurrentValue = 22,
-            Flag = "SliderCloneSpeed",
-            Callback = function(v) cloneVelocidade = v end,
-        })
+        pcall(function()
+            tab:CreateSlider({
+                Name = "Velocidade",
+                Range = {10, 100},
+                Increment = 2,
+                Suffix = " speed",
+                CurrentValue = 22,
+                Flag = "SliderCloneSpeed",
+                Callback = function(v) cloneVelocidade = v end,
+            })
+        end)
 
-        tab:CreateSlider({
-            Name = "Distancia (roda)",
-            Range = {2, 20},
-            Increment = 0.5,
-            Suffix = " studs",
-            CurrentValue = 5,
-            Flag = "SliderCloneDist",
-            Callback = function(v) cloneDistancia = v end,
-        })
+        pcall(function()
+            tab:CreateSlider({
+                Name = "Distancia (roda)",
+                Range = {2, 20},
+                Increment = 0.5,
+                Suffix = " studs",
+                CurrentValue = 5,
+                Flag = "SliderCloneDist",
+                Callback = function(v) cloneDistancia = v end,
+            })
+        end)
 
-        tab:CreateSlider({
-            Name = "Raio de Spawn",
-            Range = {5, 50},
-            Increment = 1,
-            Suffix = " studs",
-            CurrentValue = 15,
-            Flag = "SliderCloneRaio",
-            Callback = function(v) cloneSpawnRaio = v end,
-        })
+        pcall(function()
+            tab:CreateSlider({
+                Name = "Raio de Spawn",
+                Range = {5, 50},
+                Increment = 1,
+                Suffix = " studs",
+                CurrentValue = 15,
+                Flag = "SliderCloneRaio",
+                Callback = function(v) cloneSpawnRaio = v end,
+            })
+        end)
 
-        tab:CreateToggle({
-            Name = "Clones Dancam",
-            CurrentValue = true,
-            Flag = "ToggleCloneDanca",
-            Callback = function(v)
-                cloneDancar = v
-                if not v then
-                    for _, cd in ipairs(clonesAtivos) do
-                        if cd.dancando then
-                            pcall(function() if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end end)
-                            cd.animDancaTrack = nil
-                            cd.dancando = false
-                            cd.animAndarTrack = nil
+        pcall(function()
+            tab:CreateToggle({
+                Name = "Clones Dancam",
+                CurrentValue = true,
+                Flag = "ToggleCloneDanca",
+                Callback = function(v)
+                    cloneDancar = v
+                    if not v then
+                        for _, cd in ipairs(clonesAtivos) do
+                            if cd.dancando then
+                                pcall(function() if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end end)
+                                cd.animDancaTrack = nil
+                                cd.dancando = false
+                                cd.animAndarTrack = nil
+                            end
                         end
                     end
-                end
-            end,
-        })
+                end,
+            })
+        end)
 
-        tab:CreateSection("Info")
-        tab:CreateButton({
-            Name = "Ver Qtd Ativos",
-            Callback = function()
-                local total = getTotalClonesAtivos()
-                safeNotify("Clones Ativos", tostring(total) .. " clones no mapa")
-                addLog("Clones ativos: " .. total, "INFO")
-            end,
-        })
+        pcall(function() tab:CreateSection("Info") end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "Ver Qtd Ativos",
+                Callback = function()
+                    local total = getTotalClonesAtivos()
+                    safeNotify("Clones Ativos", tostring(total) .. " clones no mapa")
+                    addLog("Clones ativos: " .. total, "INFO")
+                end,
+            })
+        end)
     end
 end
+
+task.wait(0.1)
 
 -- ============================================================
 -- ABA FUGIR
@@ -1949,76 +2056,93 @@ end
 do
     local tab = criarTabSegura("Fugir", 4483362458)
     if tab then
-        tab:CreateSection("FUGA IMPOSSIVEL")
-        tab:CreateDropdown({
-            Name = "Fugir de quem?",
-            Options = getListaPlayers(),
-            CurrentOption = "Nenhum",
-            MultipleOptions = false,
-            Flag = "DropFugir",
-            Callback = function(o)
-                if o and o[1] then
-                    local p = getPlayerByName(o[1])
-                    if p then marcarPlayerSelecionado(p) end
-                end
-            end,
-        })
-        tab:CreateInput({
-            Name = "Digitar Nome",
-            PlaceholderText = "Perseguidor...",
-            RemoveTextAfterFocusLost = false,
-            Flag = "InputFugir",
-            Callback = function(t)
-                if t and t ~= "" then selecionarPlayer(t) end
-            end,
-        })
-        tab:CreateSection("Acoes")
-        tab:CreateButton({
-            Name = "FUGIR!",
-            Callback = function()
-                local nome = nil
-                pcall(function()
-                    local f = Rayfield.Flags
-                    if f and f.DropFugir and f.DropFugir.CurrentOption then
-                        local opt = f.DropFugir.CurrentOption
-                        nome = type(opt) == "table" and opt[1] or opt
+        pcall(function() tab:CreateSection("FUGA IMPOSSIVEL") end)
+
+        pcall(function()
+            tab:CreateDropdown({
+                Name = "Fugir de quem?",
+                Options = getListaPlayersComNenhum(),
+                CurrentOption = {"Nenhum"},
+                MultipleOptions = false,
+                Flag = "DropFugir",
+                Callback = function(o)
+                    local valor = getDropdownValue(o)
+                    if valor and valor ~= "Nenhum" then
+                        local p = getPlayerByName(valor)
+                        if p then marcarPlayerSelecionado(p) end
                     end
-                end)
-                if (not nome or nome == "" or nome == "Nenhum") then
+                end,
+            })
+        end)
+
+        pcall(function()
+            tab:CreateInput({
+                Name = "Digitar Nome",
+                PlaceholderText = "Perseguidor...",
+                RemoveTextAfterFocusLost = false,
+                Flag = "InputFugir",
+                Callback = function(t)
+                    if t and t ~= "" then selecionarPlayer(t) end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSection("Acoes") end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "FUGIR!",
+                Callback = function()
+                    local nome = nil
                     pcall(function()
                         local f = Rayfield.Flags
-                        if f and f.InputFugir then
-                            local v = f.InputFugir.CurrentValue or f.InputFugir
-                            if type(v) == "string" and v ~= "" then nome = v end
+                        if f and f.DropFugir and f.DropFugir.CurrentOption then
+                            local opt = f.DropFugir.CurrentOption
+                            nome = type(opt) == "table" and opt[1] or opt
                         end
                     end)
-                end
-                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
-                    nome = playerSelecionadoNome
-                end
-                if not nome or nome == "" or nome == "Nenhum" then
-                    safeNotify("Erro", "Selecione de quem fugir!")
-                    return
-                end
-                local p = getPlayerByName(nome)
-                if p then iniciarFugir(p)
-                else safeNotify("Erro", nome .. " nao encontrado!") end
-            end,
-        })
-        tab:CreateButton({
-            Name = "PARAR DE FUGIR",
-            Callback = function()
-                if fugindo then pararFugir()
-                else safeNotify("Info", "Nao esta fugindo!") end
-            end,
-        })
-        tab:CreateSection("Config Fuga")
-        tab:CreateSlider({Name = "Dist Minima", Range = {3, 20}, Increment = 1, Suffix = " studs", CurrentValue = 8, Flag = "SliderDistMin", Callback = function(v) fugirDistanciaMinima = v end})
-        tab:CreateSlider({Name = "Dist Segura", Range = {15, 80}, Increment = 5, Suffix = " studs", CurrentValue = 30, Flag = "SliderFugirDist", Callback = function(v) fugirDistanciaSegura = v end})
-        tab:CreateSlider({Name = "Intervalo Juke", Range = {0.3, 3}, Increment = 0.1, Suffix = "s", CurrentValue = 0.8, Flag = "SliderJuke", Callback = function(v) fugirJukeInterval = v end})
-        tab:CreateSlider({Name = "Duracao Fantasma", Range = {0.5, 5}, Increment = 0.5, Suffix = "s", CurrentValue = 1.5, Flag = "SliderFantasma", Callback = function(v) FANTASMA_DURACAO = v end})
+                    if (not nome or nome == "" or nome == "Nenhum") then
+                        pcall(function()
+                            local f = Rayfield.Flags
+                            if f and f.InputFugir then
+                                local v = f.InputFugir.CurrentValue or f.InputFugir
+                                if type(v) == "string" and v ~= "" then nome = v end
+                            end
+                        end)
+                    end
+                    if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                        nome = playerSelecionadoNome
+                    end
+                    if not nome or nome == "" or nome == "Nenhum" then
+                        safeNotify("Erro", "Selecione de quem fugir!")
+                        return
+                    end
+                    local p = getPlayerByName(nome)
+                    if p then iniciarFugir(p)
+                    else safeNotify("Erro", nome .. " nao encontrado!") end
+                end,
+            })
+        end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "PARAR DE FUGIR",
+                Callback = function()
+                    if fugindo then pararFugir()
+                    else safeNotify("Info", "Nao esta fugindo!") end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSection("Config Fuga") end)
+        pcall(function() tab:CreateSlider({Name = "Dist Minima", Range = {3, 20}, Increment = 1, Suffix = " studs", CurrentValue = 8, Flag = "SliderDistMin", Callback = function(v) fugirDistanciaMinima = v end}) end)
+        pcall(function() tab:CreateSlider({Name = "Dist Segura", Range = {15, 80}, Increment = 5, Suffix = " studs", CurrentValue = 30, Flag = "SliderFugirDist", Callback = function(v) fugirDistanciaSegura = v end}) end)
+        pcall(function() tab:CreateSlider({Name = "Intervalo Juke", Range = {0.3, 3}, Increment = 0.1, Suffix = "s", CurrentValue = 0.8, Flag = "SliderJuke", Callback = function(v) fugirJukeInterval = v end}) end)
+        pcall(function() tab:CreateSlider({Name = "Duracao Fantasma", Range = {0.5, 5}, Increment = 0.5, Suffix = "s", CurrentValue = 1.5, Flag = "SliderFantasma", Callback = function(v) FANTASMA_DURACAO = v end}) end)
     end
 end
+
+task.wait(0.1)
 
 -- ============================================================
 -- ABA ANIMACOES
@@ -2026,86 +2150,111 @@ end
 do
     local tab = criarTabSegura("Anim", 4483362458)
     if tab then
-        tab:CreateSection("Andar")
+        pcall(function() tab:CreateSection("Andar") end)
         local na = {}
         for _, a in ipairs(ANIMS_ANDAR) do table.insert(na, a.nome) end
-        tab:CreateDropdown({
-            Name = "Estilo de Andar",
-            Options = na,
-            CurrentOption = ANIMS_ANDAR[1].nome,
-            MultipleOptions = false,
-            Flag = "DropAndar",
-            Callback = function(o)
-                for i, a in ipairs(ANIMS_ANDAR) do
-                    if a.nome == o[1] then
-                        animAndarAtual = i
-                        if animAndarTrack then pcall(function() animAndarTrack:Stop(0) end); animAndarTrack = nil end
-                        for _, cd in ipairs(clonesAtivos) do
-                            if cd.animAndarTrack then pcall(function() cd.animAndarTrack:Stop(0) end); cd.animAndarTrack = nil end
-                        end
-                        break
-                    end
-                end
-            end,
-        })
-        tab:CreateSection("Danca")
-        tab:CreateToggle({
-            Name = "Dancar quando alvo para",
-            CurrentValue = true,
-            Flag = "ToggleDancar",
-            Callback = function(v)
-                dancarAoParar = v
-                if not v and estaDancando then pararDanca() end
-            end,
-        })
-        tab:CreateSlider({Name = "Tempo para dancar", Range = {0.3, 3}, Increment = 0.1, Suffix = "s", CurrentValue = 0.8, Flag = "SliderDancaDelay", Callback = function(v) alvoParadoThreshold = v end})
-        local nd = {}
-        for _, d in ipairs(DANCAS) do table.insert(nd, d.nome) end
-        tab:CreateDropdown({
-            Name = "Escolher Danca",
-            Options = nd,
-            CurrentOption = DANCAS[1].nome,
-            MultipleOptions = false,
-            Flag = "DropDanca",
-            Callback = function(o)
-                for i, d in ipairs(DANCAS) do
-                    if d.nome == o[1] then
-                        animDancaAtual = i
-                        if estaDancando then
-                            pararDanca()
-                            task.spawn(function() task.wait(0.15); iniciarDanca(true) end)
-                        end
-                        for _, cd in ipairs(clonesAtivos) do
-                            if cd.dancando and cd.animDancaTrack then
-                                pcall(function() cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end)
-                                cd.animDancaTrack = nil
-                                cd.dancando = false
+
+        pcall(function()
+            tab:CreateDropdown({
+                Name = "Estilo de Andar",
+                Options = na,
+                CurrentOption = {ANIMS_ANDAR[1].nome},
+                MultipleOptions = false,
+                Flag = "DropAndar",
+                Callback = function(o)
+                    local valor = getDropdownValue(o)
+                    if valor then
+                        for i, a in ipairs(ANIMS_ANDAR) do
+                            if a.nome == valor then
+                                animAndarAtual = i
+                                if animAndarTrack then pcall(function() animAndarTrack:Stop(0) end); animAndarTrack = nil end
+                                for _, cd in ipairs(clonesAtivos) do
+                                    if cd.animAndarTrack then pcall(function() cd.animAndarTrack:Stop(0) end); cd.animAndarTrack = nil end
+                                end
+                                break
                             end
                         end
-                        break
                     end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSection("Danca") end)
+
+        pcall(function()
+            tab:CreateToggle({
+                Name = "Dancar quando alvo para",
+                CurrentValue = true,
+                Flag = "ToggleDancar",
+                Callback = function(v)
+                    dancarAoParar = v
+                    if not v and estaDancando then pararDanca() end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSlider({Name = "Tempo para dancar", Range = {0.3, 3}, Increment = 0.1, Suffix = "s", CurrentValue = 0.8, Flag = "SliderDancaDelay", Callback = function(v) alvoParadoThreshold = v end}) end)
+
+        local nd = {}
+        for _, d in ipairs(DANCAS) do table.insert(nd, d.nome) end
+
+        pcall(function()
+            tab:CreateDropdown({
+                Name = "Escolher Danca",
+                Options = nd,
+                CurrentOption = {DANCAS[1].nome},
+                MultipleOptions = false,
+                Flag = "DropDanca",
+                Callback = function(o)
+                    local valor = getDropdownValue(o)
+                    if valor then
+                        for i, d in ipairs(DANCAS) do
+                            if d.nome == valor then
+                                animDancaAtual = i
+                                if estaDancando then
+                                    pararDanca()
+                                    task.spawn(function() task.wait(0.15); iniciarDanca(true) end)
+                                end
+                                for _, cd in ipairs(clonesAtivos) do
+                                    if cd.dancando and cd.animDancaTrack then
+                                        pcall(function() cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end)
+                                        cd.animDancaTrack = nil
+                                        cd.dancando = false
+                                    end
+                                end
+                                break
+                            end
+                        end
+                    end
+                end,
+            })
+        end)
+
+        pcall(function() tab:CreateSection("Testar") end)
+        pcall(function() tab:CreateButton({Name = "Dancar Agora!", Callback = function() dancaCancelada = false; task.spawn(function() iniciarDanca(true) end) end}) end)
+        pcall(function()
+            tab:CreateButton({
+                Name = "Testar Andar",
+                Callback = function()
+                    pararTodasAnimacoes()
+                    local ad = ANIMS_ANDAR[animAndarAtual]
+                    if ad then animAndarTrack = tocarAnimacao(ad.id, true, 0.2) end
                 end
-            end,
-        })
-        tab:CreateSection("Testar")
-        tab:CreateButton({Name = "Dancar Agora!", Callback = function() dancaCancelada = false; task.spawn(function() iniciarDanca(true) end) end})
-        tab:CreateButton({
-            Name = "Testar Andar",
-            Callback = function()
-                pararTodasAnimacoes()
-                local ad = ANIMS_ANDAR[animAndarAtual]
-                if ad then animAndarTrack = tocarAnimacao(ad.id, true, 0.2) end
-            end
-        })
-        tab:CreateButton({
-            Name = "Parar Animacoes",
-            Callback = function()
-                pararTodasAnimacoes()
-                task.spawn(function() for i = 1, 3 do task.wait(0.1); forcarPararTodasTracks() end end)
-            end
-        })
+            })
+        end)
+        pcall(function()
+            tab:CreateButton({
+                Name = "Parar Animacoes",
+                Callback = function()
+                    pararTodasAnimacoes()
+                    task.spawn(function() for i = 1, 3 do task.wait(0.1); forcarPararTodasTracks() end end)
+                end
+            })
+        end)
     end
 end
+
+task.wait(0.1)
 
 -- ============================================================
 -- ABA CONFIG
@@ -2113,40 +2262,46 @@ end
 do
     local tab = criarTabSegura("Config", 4483362458)
     if tab then
-        tab:CreateSection("Distancia")
-        tab:CreateSlider({Name = "Distancia do Alvo", Range = {1, 20}, Increment = 0.5, Suffix = " studs", CurrentValue = 3, Flag = "SliderDist", Callback = function(v) distanciaSeguir = v end})
-        tab:CreateSection("Speed Hack")
-        tab:CreateToggle({Name = "Speed Hack", CurrentValue = false, Flag = "ToggleSpeed", Callback = function(v) setSpeed(v, speedValor) end})
-        tab:CreateSlider({Name = "Velocidade", Range = {16, 200}, Increment = 2, Suffix = "", CurrentValue = 50, Flag = "SliderSpeed", Callback = function(v) speedValor = v; if speedAtivo then setSpeed(true, v) end end})
-        tab:CreateSection("Invisibilidade")
-        tab:CreateToggle({
-            Name = "Invisivel ao Seguir",
-            CurrentValue = false,
-            Flag = "ToggleInvis",
-            Callback = function(v)
-                modoInvisivel = v
-                if not v and LocalPlayer.Character then
-                    pcall(function()
-                        for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
-                            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.Transparency = 0
-                            elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency = 0 end
-                        end
-                    end)
-                end
-            end,
-        })
-        tab:CreateSection("Transparencia do Menu")
-        tab:CreateSlider({
-            Name = "Transparencia",
-            Range = {0, 100},
-            Increment = 5,
-            Suffix = "%",
-            CurrentValue = 0,
-            Flag = "SliderTransp",
-            Callback = function(v) aplicarTransparencia(v / 100) end,
-        })
+        pcall(function() tab:CreateSection("Distancia") end)
+        pcall(function() tab:CreateSlider({Name = "Distancia do Alvo", Range = {1, 20}, Increment = 0.5, Suffix = " studs", CurrentValue = 3, Flag = "SliderDist", Callback = function(v) distanciaSeguir = v end}) end)
+        pcall(function() tab:CreateSection("Speed Hack") end)
+        pcall(function() tab:CreateToggle({Name = "Speed Hack", CurrentValue = false, Flag = "ToggleSpeed", Callback = function(v) setSpeed(v, speedValor) end}) end)
+        pcall(function() tab:CreateSlider({Name = "Velocidade", Range = {16, 200}, Increment = 2, Suffix = "", CurrentValue = 50, Flag = "SliderSpeed", Callback = function(v) speedValor = v; if speedAtivo then setSpeed(true, v) end end}) end)
+        pcall(function() tab:CreateSection("Invisibilidade") end)
+        pcall(function()
+            tab:CreateToggle({
+                Name = "Invisivel ao Seguir",
+                CurrentValue = false,
+                Flag = "ToggleInvis",
+                Callback = function(v)
+                    modoInvisivel = v
+                    if not v and LocalPlayer.Character then
+                        pcall(function()
+                            for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.Transparency = 0
+                                elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency = 0 end
+                            end
+                        end)
+                    end
+                end,
+            })
+        end)
+        pcall(function() tab:CreateSection("Transparencia do Menu") end)
+        pcall(function()
+            tab:CreateSlider({
+                Name = "Transparencia",
+                Range = {0, 100},
+                Increment = 5,
+                Suffix = "%",
+                CurrentValue = 0,
+                Flag = "SliderTransp",
+                Callback = function(v) aplicarTransparencia(v / 100) end,
+            })
+        end)
     end
 end
+
+task.wait(0.1)
 
 -- ============================================================
 -- ABA TELEPORTE
@@ -2154,69 +2309,84 @@ end
 do
     local tab = criarTabSegura("TP", 4483362458)
     if tab then
-        tab:CreateSection("Teleporte")
-        tab:CreateDropdown({
-            Name = "Player",
-            Options = getListaPlayers(),
-            CurrentOption = "Nenhum",
-            MultipleOptions = false,
-            Flag = "DropTP",
-            Callback = function(o)
-                if o[1] then
-                    local p = getPlayerByName(o[1])
-                    if p then marcarPlayerSelecionado(p) end
-                end
-            end,
-        })
-        tab:CreateInput({
-            Name = "Digitar Nome",
-            PlaceholderText = "Nome...",
-            RemoveTextAfterFocusLost = false,
-            Flag = "InputTP",
-            Callback = function(t)
-                if t and t ~= "" then selecionarPlayer(t) end
-            end,
-        })
-        tab:CreateButton({
-            Name = "Teleportar",
-            Callback = function()
-                local nome = nil
-                pcall(function()
-                    local f = Rayfield.Flags
-                    if f and f.DropTP and f.DropTP.CurrentOption then
-                        local o = f.DropTP.CurrentOption
-                        nome = type(o) == "table" and o[1] or o
+        pcall(function() tab:CreateSection("Teleporte") end)
+
+        pcall(function()
+            tab:CreateDropdown({
+                Name = "Player",
+                Options = getListaPlayersComNenhum(),
+                CurrentOption = {"Nenhum"},
+                MultipleOptions = false,
+                Flag = "DropTP",
+                Callback = function(o)
+                    local valor = getDropdownValue(o)
+                    if valor and valor ~= "Nenhum" then
+                        local p = getPlayerByName(valor)
+                        if p then marcarPlayerSelecionado(p) end
                     end
-                end)
-                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
-                    nome = playerSelecionadoNome
-                end
-                if nome and nome ~= "" and nome ~= "Nenhum" then teleportarParaPlayer(nome)
-                else safeNotify("Erro", "Selecione um player!") end
-            end,
-        })
-        tab:CreateButton({
-            Name = "TP + Seguir",
-            Callback = function()
-                local nome = nil
-                pcall(function()
-                    local f = Rayfield.Flags
-                    if f and f.DropTP and f.DropTP.CurrentOption then
-                        local o = f.DropTP.CurrentOption
-                        nome = type(o) == "table" and o[1] or o
+                end,
+            })
+        end)
+
+        pcall(function()
+            tab:CreateInput({
+                Name = "Digitar Nome",
+                PlaceholderText = "Nome...",
+                RemoveTextAfterFocusLost = false,
+                Flag = "InputTP",
+                Callback = function(t)
+                    if t and t ~= "" then selecionarPlayer(t) end
+                end,
+            })
+        end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "Teleportar",
+                Callback = function()
+                    local nome = nil
+                    pcall(function()
+                        local f = Rayfield.Flags
+                        if f and f.DropTP and f.DropTP.CurrentOption then
+                            local o = f.DropTP.CurrentOption
+                            nome = type(o) == "table" and o[1] or o
+                        end
+                    end)
+                    if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                        nome = playerSelecionadoNome
                     end
-                end)
-                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
-                    nome = playerSelecionadoNome
-                end
-                if nome and nome ~= "" and nome ~= "Nenhum" then
-                    local p = getPlayerByName(nome)
-                    if p then teleportarParaPlayer(nome); task.wait(0.3); iniciarSeguir(p) end
-                else safeNotify("Erro", "Selecione um player!") end
-            end,
-        })
+                    if nome and nome ~= "" and nome ~= "Nenhum" then teleportarParaPlayer(nome)
+                    else safeNotify("Erro", "Selecione um player!") end
+                end,
+            })
+        end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "TP + Seguir",
+                Callback = function()
+                    local nome = nil
+                    pcall(function()
+                        local f = Rayfield.Flags
+                        if f and f.DropTP and f.DropTP.CurrentOption then
+                            local o = f.DropTP.CurrentOption
+                            nome = type(o) == "table" and o[1] or o
+                        end
+                    end)
+                    if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                        nome = playerSelecionadoNome
+                    end
+                    if nome and nome ~= "" and nome ~= "Nenhum" then
+                        local p = getPlayerByName(nome)
+                        if p then teleportarParaPlayer(nome); task.wait(0.3); iniciarSeguir(p) end
+                    else safeNotify("Erro", "Selecione um player!") end
+                end,
+            })
+        end)
     end
 end
+
+task.wait(0.1)
 
 -- ============================================================
 -- ABA GERAL
@@ -2224,29 +2394,32 @@ end
 do
     local tab = criarTabSegura("Geral", 4483362458)
     if tab then
-        tab:CreateSection("Controle")
-        tab:CreateButton({
-            Name = "PARAR TUDO",
-            Callback = function()
-                removerTodosClones()
-                pararTudo()
-            end
-        })
-        tab:CreateButton({
-            Name = "Atualizar Lista",
-            Callback = function()
-                local lista = getListaPlayers()
-                for _, d in ipairs({"DropSeguir", "DropTP", "DropFugir", "DropCloneAlvo"}) do
-                    pcall(function()
-                        local f = Rayfield.Flags
-                        if f and f[d] then f[d]:Refresh(lista) end
-                    end)
+        pcall(function() tab:CreateSection("Controle") end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "PARAR TUDO",
+                Callback = function()
+                    removerTodosClones()
+                    pararTudo()
                 end
-                safeNotify("Atualizado", #lista .. " players")
-            end,
-        })
+            })
+        end)
+
+        pcall(function()
+            tab:CreateButton({
+                Name = "Atualizar Lista",
+                Callback = function()
+                    atualizarDropdowns()
+                    local lista = getListaPlayers()
+                    safeNotify("Atualizado", #lista .. " players")
+                end,
+            })
+        end)
     end
 end
+
+task.wait(0.1)
 
 -- ============================================================
 -- ABA LOGS
@@ -2254,181 +2427,191 @@ end
 do
     local tab = criarTabSegura("Logs", 4483362458)
     if tab then
-        tab:CreateSection("Sistema de Logs")
-        tab:CreateParagraph({
-            Title = "Como funciona",
-            Content = "Todos os eventos do Delta sao registrados aqui."
-        })
+        pcall(function() tab:CreateSection("Sistema de Logs") end)
 
-        tab:CreateSection("Acoes")
-        tab:CreateButton({
-            Name = "Copiar Todos os Logs",
-            Callback = function()
-                local texto = table.concat(LogBuffer, "\n")
-                local ok = pcall(function()
-                    if setclipboard then setclipboard(texto)
-                    elseif toclipboard then toclipboard(texto)
-                    else error("Clipboard indisponivel") end
-                end)
-                if ok then
-                    safeNotify("Logs Copiados!", #LogBuffer .. " linhas copiadas")
-                else
-                    safeNotify("Info", "Clipboard indisponivel")
-                end
-            end,
-        })
+        pcall(function()
+            tab:CreateParagraph({
+                Title = "Como funciona",
+                Content = "Todos os eventos do Delta sao registrados aqui."
+            })
+        end)
 
-        tab:CreateButton({
-            Name = "Limpar Logs",
-            Callback = function()
-                LogBuffer = {}
-                addLog("--- Logs limpos ---", "INFO")
-                safeNotify("Logs", "Logs limpos!")
-            end,
-        })
+        pcall(function() tab:CreateSection("Acoes") end)
 
-        tab:CreateSection("Visualizar Logs")
-
-        tab:CreateButton({
-            Name = "Ver Ultimos 20 Logs",
-            Callback = function()
-                local inicio = math.max(1, #LogBuffer - 19)
-                local linhas = {}
-                for i = inicio, #LogBuffer do
-                    table.insert(linhas, LogBuffer[i])
-                end
-                local texto = table.concat(linhas, "\n")
-                if texto == "" then texto = "(sem logs)" end
-
-                local screenGui = Instance.new("ScreenGui")
-                screenGui.Name = "DeltaLogPopup"
-                screenGui.ResetOnSpawn = false
-
-                local ok, parent = pcall(function()
-                    if gethui then return gethui() end
-                    return game:GetService("CoreGui")
-                end)
-                if not ok then parent = LocalPlayer:WaitForChild("PlayerGui") end
-                screenGui.Parent = parent
-
-                local frame = Instance.new("Frame")
-                frame.Size = UDim2.new(0, 600, 0, 400)
-                frame.Position = UDim2.new(0.5, -300, 0.5, -200)
-                frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-                frame.BorderSizePixel = 0
-                frame.Parent = screenGui
-
-                local corner = Instance.new("UICorner")
-                corner.CornerRadius = UDim.new(0, 8)
-                corner.Parent = frame
-
-                local title = Instance.new("TextLabel")
-                title.Size = UDim2.new(1, 0, 0, 35)
-                title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-                title.Text = "  Delta Logs (Ultimos " .. #linhas .. ")"
-                title.TextColor3 = Color3.fromRGB(200, 200, 220)
-                title.TextXAlignment = Enum.TextXAlignment.Left
-                title.Font = Enum.Font.GothamBold
-                title.TextSize = 14
-                title.Parent = frame
-
-                local titleCorner = Instance.new("UICorner")
-                titleCorner.CornerRadius = UDim.new(0, 8)
-                titleCorner.Parent = title
-
-                local scrollFrame = Instance.new("ScrollingFrame")
-                scrollFrame.Size = UDim2.new(1, -20, 1, -80)
-                scrollFrame.Position = UDim2.new(0, 10, 0, 40)
-                scrollFrame.BackgroundTransparency = 1
-                scrollFrame.ScrollBarThickness = 6
-                scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-                scrollFrame.Parent = frame
-
-                local logLabel = Instance.new("TextLabel")
-                logLabel.Size = UDim2.new(1, -10, 0, 0)
-                logLabel.AutomaticSize = Enum.AutomaticSize.Y
-                logLabel.BackgroundTransparency = 1
-                logLabel.Text = texto
-                logLabel.TextColor3 = Color3.fromRGB(180, 255, 180)
-                logLabel.TextXAlignment = Enum.TextXAlignment.Left
-                logLabel.TextYAlignment = Enum.TextYAlignment.Top
-                logLabel.Font = Enum.Font.Code
-                logLabel.TextSize = 12
-                logLabel.TextWrapped = true
-                logLabel.Parent = scrollFrame
-
-                task.defer(function()
-                    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, logLabel.TextBounds.Y + 20)
-                    scrollFrame.CanvasPosition = Vector2.new(0, math.max(0, logLabel.TextBounds.Y - scrollFrame.AbsoluteSize.Y))
-                end)
-
-                local copyBtn = Instance.new("TextButton")
-                copyBtn.Size = UDim2.new(0, 120, 0, 30)
-                copyBtn.Position = UDim2.new(1, -130, 1, -38)
-                copyBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
-                copyBtn.Text = "Copiar"
-                copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-                copyBtn.Font = Enum.Font.GothamBold
-                copyBtn.TextSize = 13
-                copyBtn.Parent = frame
-
-                local copyCorner = Instance.new("UICorner")
-                copyCorner.CornerRadius = UDim.new(0, 6)
-                copyCorner.Parent = copyBtn
-
-                copyBtn.MouseButton1Click:Connect(function()
-                    pcall(function()
-                        local allText = table.concat(LogBuffer, "\n")
-                        if setclipboard then setclipboard(allText)
-                        elseif toclipboard then toclipboard(allText) end
+        pcall(function()
+            tab:CreateButton({
+                Name = "Copiar Todos os Logs",
+                Callback = function()
+                    local texto = table.concat(LogBuffer, "\n")
+                    local ok = pcall(function()
+                        if setclipboard then setclipboard(texto)
+                        elseif toclipboard then toclipboard(texto)
+                        else error("Clipboard indisponivel") end
                     end)
-                    copyBtn.Text = "Copiado!"
-                    task.wait(1.5)
-                    if copyBtn and copyBtn.Parent then copyBtn.Text = "Copiar" end
-                end)
+                    if ok then
+                        safeNotify("Logs Copiados!", #LogBuffer .. " linhas copiadas")
+                    else
+                        safeNotify("Info", "Clipboard indisponivel")
+                    end
+                end,
+            })
+        end)
 
-                local closeBtn = Instance.new("TextButton")
-                closeBtn.Size = UDim2.new(0, 30, 0, 30)
-                closeBtn.Position = UDim2.new(1, -35, 0, 5)
-                closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-                closeBtn.Text = "X"
-                closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-                closeBtn.Font = Enum.Font.GothamBold
-                closeBtn.TextSize = 14
-                closeBtn.Parent = frame
+        pcall(function()
+            tab:CreateButton({
+                Name = "Limpar Logs",
+                Callback = function()
+                    LogBuffer = {}
+                    addLog("--- Logs limpos ---", "INFO")
+                    safeNotify("Logs", "Logs limpos!")
+                end,
+            })
+        end)
 
-                local closeCorner = Instance.new("UICorner")
-                closeCorner.CornerRadius = UDim.new(0, 6)
-                closeCorner.Parent = closeBtn
+        pcall(function() tab:CreateSection("Visualizar Logs") end)
 
-                closeBtn.MouseButton1Click:Connect(function()
-                    screenGui:Destroy()
-                end)
+        pcall(function()
+            tab:CreateButton({
+                Name = "Ver Ultimos 20 Logs",
+                Callback = function()
+                    local inicio = math.max(1, #LogBuffer - 19)
+                    local linhas = {}
+                    for i = inicio, #LogBuffer do
+                        table.insert(linhas, LogBuffer[i])
+                    end
+                    local texto = table.concat(linhas, "\n")
+                    if texto == "" then texto = "(sem logs)" end
 
-                local dragging, dragInput, dragStart, startPos
-                title.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                        dragging = true
-                        dragStart = input.Position
-                        startPos = frame.Position
-                        input.Changed:Connect(function()
-                            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                    local screenGui = Instance.new("ScreenGui")
+                    screenGui.Name = "DeltaLogPopup"
+                    screenGui.ResetOnSpawn = false
+
+                    local ok, parent = pcall(function()
+                        if gethui then return gethui() end
+                        return game:GetService("CoreGui")
+                    end)
+                    if not ok then parent = LocalPlayer:WaitForChild("PlayerGui") end
+                    screenGui.Parent = parent
+
+                    local frame = Instance.new("Frame")
+                    frame.Size = UDim2.new(0, 600, 0, 400)
+                    frame.Position = UDim2.new(0.5, -300, 0.5, -200)
+                    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+                    frame.BorderSizePixel = 0
+                    frame.Parent = screenGui
+
+                    local corner = Instance.new("UICorner")
+                    corner.CornerRadius = UDim.new(0, 8)
+                    corner.Parent = frame
+
+                    local title = Instance.new("TextLabel")
+                    title.Size = UDim2.new(1, 0, 0, 35)
+                    title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+                    title.Text = "  Delta Logs (Ultimos " .. #linhas .. ")"
+                    title.TextColor3 = Color3.fromRGB(200, 200, 220)
+                    title.TextXAlignment = Enum.TextXAlignment.Left
+                    title.Font = Enum.Font.GothamBold
+                    title.TextSize = 14
+                    title.Parent = frame
+
+                    local titleCorner = Instance.new("UICorner")
+                    titleCorner.CornerRadius = UDim.new(0, 8)
+                    titleCorner.Parent = title
+
+                    local scrollFrame = Instance.new("ScrollingFrame")
+                    scrollFrame.Size = UDim2.new(1, -20, 1, -80)
+                    scrollFrame.Position = UDim2.new(0, 10, 0, 40)
+                    scrollFrame.BackgroundTransparency = 1
+                    scrollFrame.ScrollBarThickness = 6
+                    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+                    scrollFrame.Parent = frame
+
+                    local logLabel = Instance.new("TextLabel")
+                    logLabel.Size = UDim2.new(1, -10, 0, 0)
+                    logLabel.AutomaticSize = Enum.AutomaticSize.Y
+                    logLabel.BackgroundTransparency = 1
+                    logLabel.Text = texto
+                    logLabel.TextColor3 = Color3.fromRGB(180, 255, 180)
+                    logLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    logLabel.TextYAlignment = Enum.TextYAlignment.Top
+                    logLabel.Font = Enum.Font.Code
+                    logLabel.TextSize = 12
+                    logLabel.TextWrapped = true
+                    logLabel.Parent = scrollFrame
+
+                    task.defer(function()
+                        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, logLabel.TextBounds.Y + 20)
+                        scrollFrame.CanvasPosition = Vector2.new(0, math.max(0, logLabel.TextBounds.Y - scrollFrame.AbsoluteSize.Y))
+                    end)
+
+                    local copyBtn = Instance.new("TextButton")
+                    copyBtn.Size = UDim2.new(0, 120, 0, 30)
+                    copyBtn.Position = UDim2.new(1, -130, 1, -38)
+                    copyBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+                    copyBtn.Text = "Copiar"
+                    copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    copyBtn.Font = Enum.Font.GothamBold
+                    copyBtn.TextSize = 13
+                    copyBtn.Parent = frame
+
+                    local copyCorner = Instance.new("UICorner")
+                    copyCorner.CornerRadius = UDim.new(0, 6)
+                    copyCorner.Parent = copyBtn
+
+                    copyBtn.MouseButton1Click:Connect(function()
+                        pcall(function()
+                            local allText = table.concat(LogBuffer, "\n")
+                            if setclipboard then setclipboard(allText)
+                            elseif toclipboard then toclipboard(allText) end
                         end)
-                    end
-                end)
-                title.InputChanged:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-                        dragInput = input
-                    end
-                end)
-                RunService.RenderStepped:Connect(function()
-                    if dragging and dragInput then
-                        local delta = dragInput.Position - dragStart
-                        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-                    end
-                end)
-            end,
-        })
+                        copyBtn.Text = "Copiado!"
+                        task.wait(1.5)
+                        if copyBtn and copyBtn.Parent then copyBtn.Text = "Copiar" end
+                    end)
+
+                    local closeBtn = Instance.new("TextButton")
+                    closeBtn.Size = UDim2.new(0, 30, 0, 30)
+                    closeBtn.Position = UDim2.new(1, -35, 0, 5)
+                    closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+                    closeBtn.Text = "X"
+                    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    closeBtn.Font = Enum.Font.GothamBold
+                    closeBtn.TextSize = 14
+                    closeBtn.Parent = frame
+
+                    local closeCorner = Instance.new("UICorner")
+                    closeCorner.CornerRadius = UDim.new(0, 6)
+                    closeCorner.Parent = closeBtn
+
+                    closeBtn.MouseButton1Click:Connect(function()
+                        screenGui:Destroy()
+                    end)
+
+                    local dragging, dragInput, dragStart, startPos
+                    title.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            dragging = true
+                            dragStart = input.Position
+                            startPos = frame.Position
+                            input.Changed:Connect(function()
+                                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                            end)
+                        end
+                    end)
+                    title.InputChanged:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                            dragInput = input
+                        end
+                    end)
+                    RunService.RenderStepped:Connect(function()
+                        if dragging and dragInput then
+                            local delta = dragInput.Position - dragStart
+                            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                        end
+                    end)
+                end,
+            })
+        end)
     end
 end
 
@@ -2442,24 +2625,12 @@ do
         if playerSelecionadoNome == player.Name then limparHighlightSelecionado() end
         if cloneAlvo and cloneAlvo == player then removerTodosClones(); cloneAlvo = nil; cloneAlvoNome = nil end
         task.wait(1)
-        local lista = getListaPlayers()
-        for _, d in ipairs({"DropSeguir", "DropTP", "DropFugir", "DropCloneAlvo"}) do
-            pcall(function()
-                local f = Rayfield.Flags
-                if f and f[d] then f[d]:Refresh(lista) end
-            end)
-        end
+        atualizarDropdowns()
     end)
 
     Players.PlayerAdded:Connect(function()
         task.wait(2)
-        local lista = getListaPlayers()
-        for _, d in ipairs({"DropSeguir", "DropTP", "DropFugir", "DropCloneAlvo"}) do
-            pcall(function()
-                local f = Rayfield.Flags
-                if f and f[d] then f[d]:Refresh(lista) end
-            end)
-        end
+        atualizarDropdowns()
     end)
 
     LocalPlayer.CharacterAdded:Connect(function()
@@ -2489,10 +2660,10 @@ end
 -- PRONTO
 -- ============================================================
 print("========================================")
-print("[DELTA v10.1] Carregado com SUCESSO!")
+print("[DELTA v10.2] Carregado com SUCESSO!")
 print("========================================")
-addLog("=== DELTA v10.1 CARREGADO ===", "OK")
+addLog("=== DELTA v10.2 CARREGADO ===", "OK")
 addLog("Rayfield carregado em " .. string.format("%.2f", RayfieldLoadTime) .. "s", "INFO")
 addLog("Total logs: " .. #LogBuffer, "INFO")
 
-safeNotify("Delta v10.1", "Painel aberto com sucesso!")
+safeNotify("Delta v10.2", "Painel aberto com sucesso!")
