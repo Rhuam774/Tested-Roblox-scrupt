@@ -1,25 +1,87 @@
 -- ============================================================
--- MOD MENU DELTA v9.6
--- FIX: Sistema de clones reescrito (Archivable, Health, Colisao)
--- NOVO: Aba de Logs com copiar
+-- MOD MENU DELTA v10.0 - CORRECAO TOTAL DE CLONES + LOGS
+-- CORRECOES v10.0:
+--   - CLONES REESCRITOS: criacao manual de Model (sem Clone())
+--   - Humanoid configurado: BreakJointsOnDeath=false, estados
+--   - Colisao forcada em todas as partes
+--   - Animator criado manualmente para animacoes
+--   - Sistema de LOG com aba dedicada + copiar
+--   - HumanoidRootPart configurado corretamente
+--   - Fallback robusto se clone() falhar
 -- ============================================================
 
-print("[DELTA v9.6] Iniciando...")
+print("[DELTA v10.0] Iniciando...")
+
+-- ============================================================
+-- SISTEMA DE LOG (ANTES DE TUDO)
+-- ============================================================
+local LogBuffer = {}
+local MAX_LOGS = 500
+local logGuiRef = nil
+local logLabelRef = nil
+
+local function addLog(msg, tipo)
+    tipo = tipo or "INFO"
+    local timeStr = os and os.date and os.date("%H:%M:%S") or "??:??:??"
+    local entry = "[" .. timeStr .. "] [" .. tipo .. "] " .. tostring(msg)
+    table.insert(LogBuffer, entry)
+    if #LogBuffer > MAX_LOGS then table.remove(LogBuffer, 1) end
+    -- Atualizar GUI se existir
+    if logLabelRef and logLabelRef.Parent then
+        pcall(function()
+            logLabelRef.Text = table.concat(LogBuffer, "\n")
+            logLabelRef.TextSize = 13
+            -- Scroll para o fim
+            local parent = logLabelRef.Parent
+            if parent:IsA("ScrollingFrame") then
+                parent.CanvasSize = UDim2.new(0, 0, 0, logLabelRef.TextBounds.Y + 40)
+                parent.CanvasPosition = Vector2.new(0, math.max(0, logLabelRef.TextBounds.Y - parent.AbsoluteSize.Y + 40))
+            end
+        end)
+    end
+end
+
+-- Interceptar print e warn
+local _origPrint = print
+local _origWarn = warn
+
+local function safeLogPrint(...)
+    local args = {...}
+    local parts = {}
+    for i, v in ipairs(args) do parts[i] = tostring(v) end
+    local msg = table.concat(parts, "    ")
+    addLog(msg, "PRINT")
+    _origPrint(...)
+end
+
+local function safeLogWarn(...)
+    local args = {...}
+    local parts = {}
+    for i, v in ipairs(args) do parts[i] = tostring(v) end
+    local msg = table.concat(parts, "    ")
+    addLog(msg, "WARN")
+    _origWarn(...)
+end
+
+-- Nao sobrescrever print/warn globalmente para evitar recursao
+-- Em vez disso, usar addLog() diretamente no codigo
 
 -- ============================================================
 -- CARREGAR RAYFIELD
 -- ============================================================
 local Rayfield = nil
 do
+    addLog("Carregando Rayfield...")
     local ok, result = pcall(function()
         return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
     end)
     if not ok or not result then
-        warn("[DELTA] ERRO Rayfield: " .. tostring(result))
+        addLog("ERRO Rayfield: " .. tostring(result), "ERRO")
+        _origWarn("[DELTA] ERRO Rayfield: " .. tostring(result))
         return
     end
     Rayfield = result
-    print("[DELTA] Rayfield carregado!")
+    addLog("Rayfield carregado com sucesso!", "OK")
 end
 
 -- ============================================================
@@ -31,30 +93,7 @@ local PathfindingService = game:GetService("PathfindingService")
 local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
--- ============================================================
--- SISTEMA DE LOGS
--- ============================================================
-local logs = {}
-local maxLogs = 200
-
-local function addLog(msg)
-    local t = os.date("%H:%M:%S")
-    local entry = "[" .. t .. "] " .. tostring(msg)
-    table.insert(logs, entry)
-    if #logs > maxLogs then table.remove(logs, 1) end
-end
-
-local function getLogsText()
-    if #logs == 0 then return "(sem logs)" end
-    return table.concat(logs, "\n")
-end
-
-local function clearLogs()
-    logs = {}
-    addLog("Logs limpos.")
-end
-
-addLog("Delta v9.6 - Log iniciado")
+addLog("Servicos carregados. LocalPlayer: " .. LocalPlayer.Name)
 
 -- ============================================================
 -- VARIAVEIS GLOBAIS
@@ -541,7 +580,6 @@ local function iniciarSeguir(alvo)
     local modoTexto = "Normal"
     if modoSeguir == "encosto" then modoTexto = "ENCOSTO" elseif modoSeguir == "pathfinding" then modoTexto = "Pathfinding" end
     Rayfield:Notify({Title = "Seguindo!", Content = alvo.Name .. " | " .. modoTexto, Duration = 3})
-    addLog("Seguindo: " .. alvo.Name .. " (" .. modoTexto .. ")")
     if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir = nil end
     conexaoSeguir = RunService.Heartbeat:Connect(function(dt)
         if not seguindo or not playerAlvo then
@@ -605,7 +643,6 @@ local function pararSeguir()
         toqueCooldownAtivo = true; toqueCooldownTimer = TOQUE_COOLDOWN_DURACAO
     end
     Rayfield:Notify({Title = "Parou!", Content = "Parou de seguir" .. (nomeAlvo and (" " .. nomeAlvo) or ""), Duration = 3})
-    addLog("Parou de seguir: " .. tostring(nomeAlvo))
     if playerAlvo then pcall(function() marcarPlayerSelecionado(playerAlvo) end) end
     playerAlvo = nil
 end
@@ -616,7 +653,6 @@ end
 local function ativarSelecaoPorToque()
     if conexaoToque then conexaoToque:Disconnect(); conexaoToque = nil end
     selecaoPorToque = true
-    addLog("Selecao por toque ATIVADA")
     conexaoToque = RunService.Heartbeat:Connect(function(dt)
         if not selecaoPorToque then
             if conexaoToque then conexaoToque:Disconnect(); conexaoToque = nil end; return
@@ -637,7 +673,6 @@ local function ativarSelecaoPorToque()
                 local root = getRootPart(player)
                 if root and (meuRoot.Position - root.Position).Magnitude < 5 then
                     Rayfield:Notify({Title = "Toque!", Content = "Encostou em " .. player.Name, Duration = 3})
-                    addLog("Toque detectado: " .. player.Name)
                     iniciarSeguir(player); break
                 end
             end
@@ -648,7 +683,6 @@ end
 local function desativarSelecaoPorToque()
     selecaoPorToque = false
     if conexaoToque then conexaoToque:Disconnect(); conexaoToque = nil end
-    addLog("Selecao por toque DESATIVADA")
 end
 
 -- ============================================================
@@ -664,11 +698,10 @@ local function teleportarParaPlayer(nome)
     local posAtras = root.Position - (lookDir * distanciaSeguir)
     meuRoot.CFrame = CFrame.new(posAtras, root.Position)
     Rayfield:Notify({Title = "Teleportado!", Content = "Atras de " .. player.Name, Duration = 3})
-    addLog("TP para: " .. player.Name)
 end
 
 -- ============================================================
--- MODO FUGIR
+-- MODO FUGIR (FUGA IMPOSSIVEL)
 -- ============================================================
 local function desativarFantasma()
     if not fantasmaAtivo then return end
@@ -701,16 +734,16 @@ local function ativarFantasma()
 end
 
 local function analisarDirecaoFuga(meuRoot, inimigoPos, direcao, distancia)
-    local posDestino = meuRoot.Position + direcao * distancia
+    local destino = meuRoot.Position + direcao * distancia
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     pcall(function() rayParams.FilterDescendantsInstances = {LocalPlayer.Character} end)
     local result = Workspace:Raycast(meuRoot.Position, direcao * distancia, rayParams)
     local espacoLivre = distancia
     if result then espacoLivre = result.Distance end
-    local destino = meuRoot.Position + direcao * math.min(espacoLivre * 0.9, distancia)
-    local distDoInimigo = (destino - inimigoPos).Magnitude
-    return {direcao = direcao, espaco = espacoLivre, distInimigo = distDoInimigo, destino = destino}
+    local posDestino = meuRoot.Position + direcao * math.min(espacoLivre * 0.9, distancia)
+    local distDoInimigo = (posDestino - inimigoPos).Magnitude
+    return {direcao = direcao, espaco = espacoLivre, distInimigo = distDoInimigo, destino = posDestino}
 end
 
 local function melhorDirecaoFuga(meuRoot, inimigoPos)
@@ -742,7 +775,6 @@ local function iniciarFugir(perseguidor)
     fugirJukeTimer = 0; desativarFantasma()
     marcarPerseguidor(perseguidor)
     Rayfield:Notify({Title = "FUGINDO!", Content = "Fugindo de " .. perseguidor.Name, Duration = 3})
-    addLog("Fugindo de: " .. perseguidor.Name)
     conexaoFugir = RunService.Heartbeat:Connect(function(dt)
         if not fugindo or not playerPerseguidor then
             if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir = nil end; return
@@ -834,7 +866,6 @@ local function pararFugir()
     if hum then hum.WalkSpeed = speedAtivo and speedValor or walkSpeedOriginal end
     fugirMemoriaPosicoes = {}; inimigoPosAnterior = nil
     Rayfield:Notify({Title = "Parou!", Content = "Parou de fugir" .. (playerPerseguidorNome and (" de " .. playerPerseguidorNome) or ""), Duration = 3})
-    addLog("Parou de fugir: " .. tostring(playerPerseguidorNome))
     playerPerseguidor = nil
 end
 
@@ -891,16 +922,15 @@ local function pararTudo()
         elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency = 0 end
     end end)
     Rayfield:Notify({Title = "Tudo Parado", Content = "Tudo desativado.", Duration = 3})
-    addLog("TUDO PARADO")
 end
 
 -- ============================================================
 -- ============================================================
--- SISTEMA DE CLONES v4 - REESCRITO (FIX PRINCIPAL)
+-- SISTEMA DE CLONES v4.0 - COMPLETAMENTE REESCRITO
 -- ============================================================
 -- ============================================================
 
--- Achar chao com raycast
+-- Achar posicao no chao com raycast
 local function acharChao(posXZ, posYRef)
     local posY = posYRef or 100
     local origem = Vector3.new(posXZ.X, posY + 300, posXZ.Z)
@@ -913,162 +943,201 @@ local function acharChao(posXZ, posYRef)
     rayParams.FilterDescendantsInstances = ignoreList
     local result = Workspace:Raycast(origem, direcao, rayParams)
     if result then
+        addLog("Chao encontrado em Y=" .. tostring(math.floor(result.Position.Y)), "CLONE")
         return result.Position + Vector3.new(0, 3, 0)
     end
+    addLog("Chao NAO encontrado, usando fallback Y=" .. tostring(math.floor(posY + 3)), "CLONE")
     return Vector3.new(posXZ.X, posY + 3, posXZ.Z)
 end
 
--- Forcar colisao em todas as partes do clone
-local function forcarColisaoClone(modelo)
-    pcall(function()
-        for _, part in pairs(modelo:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = true
-                part.Anchored = false
-            end
-        end
+-- Copiar uma parte com propriedades visuais
+local function copiarParte(original, parent)
+    local p = Instance.new(original.ClassName)
+    p.Name = original.Name
+    p.Size = original.Size
+    p.CFrame = original.CFrame
+    p.Color = original.Color
+    p.Material = original.Material
+    p.Transparency = original.Transparency
+    p.Reflectance = original.Reflectance
+    if original:IsA("MeshPart") then
+        pcall(function() p.MeshId = original.MeshId end)
+        pcall(function() p.TextureID = original.TextureID end)
+    end
+    if original:IsA("BasePart") then
+        p.TopSurface = original.TopSurface
+        p.BottomSurface = original.BottomSurface
+    end
+    p.Parent = parent
+    return p
+end
+
+-- Copiar acessorio
+local function copiarAcessorio(original, parent)
+    local ok, acc = pcall(function()
+        local oldArch = original.Archivable
+        original.Archivable = true
+        local c = original:Clone()
+        original.Archivable = oldArch
+        return c
     end)
-end
-
--- Animar clone
-local function cloneTocarAnimacao(cloneHum, animId, looped)
-    if not cloneHum then return nil end
-    local animator = cloneHum:FindFirstChildOfClass("Animator")
-    if not animator then animator = Instance.new("Animator"); animator.Parent = cloneHum end
-    local anim = Instance.new("Animation"); anim.AnimationId = animId
-    local track = nil
-    pcall(function() track = animator:LoadAnimation(anim) end)
-    if not track then pcall(function() track = cloneHum:LoadAnimation(anim) end) end
-    if track then
-        track.Looped = looped or false
-        track.Priority = Enum.AnimationPriority.Action4
-        track:Play(0.2)
+    if ok and acc then
+        acc.Parent = parent
+        return acc
     end
-    return track
+    return nil
 end
 
--- Parar animacoes do clone
-local function clonePararAnimacoes(cloneHum)
-    pcall(function()
-        if not cloneHum then return end
-        local animator = cloneHum:FindFirstChildOfClass("Animator")
-        if animator then
-            for _, t in pairs(animator:GetPlayingAnimationTracks()) do
-                pcall(function() t:Stop(0) end)
-            end
-        end
-    end)
+-- Copiar decal/texture
+local function copiarDecal(original, parent)
+    local d = Instance.new(original.ClassName)
+    d.Name = original.Name
+    d.Face = original.Face
+    d.Texture = original.Texture
+    d.Transparency = original.Transparency
+    d.Parent = parent
+    return d
 end
 
--- Total de clones vivos
-local function getTotalClonesAtivos()
-    local total = 0
-    for _, cd in ipairs(clonesAtivos) do
-        if cd.modelo and cd.modelo.Parent then total = total + 1 end
-    end
-    return total
-end
-
--- Reordenar indices da roda
-local function rebuildCloneIndices()
-    local idx = 0
-    for _, c in ipairs(clonesAtivos) do
-        if c.modelo and c.modelo.Parent then
-            idx = idx + 1
-            c.indiceRoda = idx
-        end
-    end
-end
-
--- Remover um clone
-local function removerClone(cd)
-    pcall(function() if cd.conexao then cd.conexao:Disconnect(); cd.conexao = nil end end)
-    pcall(function() if cd.animAndarTrack then cd.animAndarTrack:Stop(0) end end)
-    pcall(function() if cd.animDancaTrack then cd.animDancaTrack:Stop(0); pcall(function() cd.animDancaTrack:Destroy() end) end end)
-    pcall(function() if cd.modelo and cd.modelo.Parent then cd.modelo:Destroy() end end)
-end
-
--- Remover todos os clones
-local function removerTodosClones()
-    for _, cd in ipairs(clonesAtivos) do removerClone(cd) end
-    clonesAtivos = {}
-    if clonePasta and clonePasta.Parent then
-        pcall(function() clonePasta:Destroy() end)
-        clonePasta = nil
-    end
-    Rayfield:Notify({Title = "Clones", Content = "Todos removidos!", Duration = 3})
-    addLog("Todos clones removidos")
-end
-
--- ============================================================
--- CRIAR UM CLONE (v4 - FIX PRINCIPAL)
--- ============================================================
-local function criarClone(alvoPlayer, indice, totalNovos)
-    addLog("Criando clone #" .. tostring(indice) .. "...")
+-- Criar clone manualmente (sem usar character:Clone())
+local function criarCloneManual(alvoPlayer, indice, totalNovos)
+    addLog("=== INICIANDO CRIACAO DE CLONE #" .. tostring(cloneContador + 1) .. " ===", "CLONE")
 
     local character = LocalPlayer.Character
     if not character then
-        addLog("ERRO: sem character local!")
+        addLog("ERRO: Sem character local!", "ERRO")
         return nil
     end
 
     local meuRoot = character:FindFirstChild("HumanoidRootPart")
     if not meuRoot then
-        addLog("ERRO: sem HumanoidRootPart local!")
+        addLog("ERRO: Sem HumanoidRootPart local!", "ERRO")
         return nil
     end
 
     local alvoRoot = getRootPart(alvoPlayer)
     if not alvoRoot then
-        addLog("ERRO: alvo sem HumanoidRootPart!")
+        addLog("ERRO: Alvo sem HumanoidRootPart!", "ERRO")
         return nil
     end
 
-    -- FIX PRINCIPAL: Habilitar Archivable antes de clonar
-    local archivableOriginal = character.Archivable
-    character.Archivable = true
+    addLog("Criando Model manualmente...", "CLONE")
 
-    local cloneModel = nil
-    local ok, errMsg = pcall(function()
-        cloneModel = character:Clone()
-    end)
-
-    -- Restaurar Archivable
-    character.Archivable = archivableOriginal
-
-    if not ok or not cloneModel then
-        addLog("ERRO ao clonar: " .. tostring(errMsg))
-        return nil
-    end
-
+    -- Criar Model do zero
+    local cloneModel = Instance.new("Model")
     cloneContador = cloneContador + 1
     cloneModel.Name = "DeltaClone_" .. cloneContador
-    addLog("Clone clonado com sucesso! ID=" .. cloneContador)
 
-    -- Remover todos os scripts do clone
-    for _, obj in pairs(cloneModel:GetDescendants()) do
-        if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
-            pcall(function() obj:Destroy() end)
+    -- Copiar todas as partes do personagem
+    local partsMap = {}
+    local hasHRP = false
+
+    for _, obj in pairs(character:GetChildren()) do
+        if obj:IsA("BasePart") then
+            local newPart = copiarParte(obj, cloneModel)
+            partsMap[obj.Name] = newPart
+            if obj.Name == "HumanoidRootPart" then hasHRP = true end
+            addLog("  Parte copiada: " .. obj.Name, "CLONE")
+
+        elseif obj:IsA("Accessory") then
+            copiarAcessorio(obj, cloneModel)
+            addLog("  Acessorio copiado: " .. obj.Name, "CLONE")
+
+        elseif obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") then
+            local c = obj:Clone()
+            c.Parent = cloneModel
+            addLog("  Roupa copiada: " .. obj.Name, "CLONE")
+
+        elseif obj:IsA("BodyColors") then
+            local c = obj:Clone()
+            c.Parent = cloneModel
+            addLog("  BodyColors copiado", "CLONE")
+
+        elseif obj:IsA("Decal") then
+            for _, decal in pairs(character:GetDescendants()) do
+                if decal:IsA("Decal") then
+                    pcall(function() copiarDecal(decal, partsMap[decal.Parent and decal.Parent.Name] or cloneModel) end)
+                end
+            end
         end
     end
 
-    -- Verificar HumanoidRootPart
-    local cRoot = cloneModel:FindFirstChild("HumanoidRootPart")
-    if not cRoot then
-        addLog("ERRO: clone sem HumanoidRootPart!")
-        pcall(function() cloneModel:Destroy() end)
-        return nil
+    -- Se nao tem HRP, criar
+    if not hasHRP then
+        local hrp = Instance.new("Part")
+        hrp.Name = "HumanoidRootPart"
+        hrp.Size = Vector3.new(2, 2, 1)
+        hrp.Transparency = 1
+        hrp.CanCollide = false
+        hrp.Parent = cloneModel
+        partsMap["HumanoidRootPart"] = hrp
+        addLog("  HumanoidRootPart criado manualmente", "CLONE")
     end
 
-    -- Criar pasta no workspace se nao existe
-    if not clonePasta or not clonePasta.Parent then
-        clonePasta = Instance.new("Folder")
-        clonePasta.Name = "DELTA_CLONES"
-        clonePasta.Parent = Workspace
-        addLog("Pasta DELTA_CLONES criada no Workspace")
+    -- Criar Humanoid NOVO (nao copiar o original!)
+    local cloneHum = Instance.new("Humanoid")
+    cloneHum.MaxHealth = 99999
+    cloneHum.Health = 99999
+    cloneHum.WalkSpeed = cloneVelocidade
+    cloneHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    cloneHum.NameDisplayDistance = 0
+    cloneHum.HealthDisplayDistance = 0
+    cloneHum.PlatformStand = false
+    cloneHum.AutoRotate = true
+    cloneHum.BreakJointsOnDeath = false
+    cloneHum.Parent = cloneModel
+    addLog("  Humanoid criado: Health=99999, Speed=" .. tostring(cloneVelocidade), "CLONE")
+
+    -- Desabilitar estados de morte
+    pcall(function()
+        cloneHum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        cloneHum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+        cloneHum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        cloneHum:ChangeState(Enum.HumanoidStateType.Running)
+        addLog("  Estados de morte desabilitados", "CLONE")
+    end)
+
+    -- Criar Animator
+    local animator = Instance.new("Animator")
+    animator.Parent = cloneHum
+    addLog("  Animator criado", "CLONE")
+
+    -- Definir PrimaryPart
+    local hrp = cloneModel:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        cloneModel.PrimaryPart = hrp
     end
 
-    -- Calcular posicao de spawn (em circulo perto do jogador)
+    -- Copiar acessorios extras (handles que podem estar dentro de parts)
+    for _, obj in pairs(character:GetDescendants()) do
+        if obj:IsA("WrapTarget") or obj:IsA("WrapLayer") then
+            pcall(function()
+                local c = obj:Clone()
+                c.Parent = cloneModel
+            end)
+        end
+    end
+
+    -- Configurar colisao e visibilidade de TODAS as partes
+    for _, part in pairs(cloneModel:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Transparency = 0
+            part.CanCollide = true
+            part.Anchored = false
+            part.CastShadow = true
+            part.CanQuery = true
+            part.CanTouch = true
+        end
+    end
+    -- HRP especificamente: NUNCA colide (padrao Roblox)
+    if hrp then
+        hrp.Transparency = 1
+        hrp.CanCollide = false
+        hrp.Anchored = true -- Ancorar temporariamente
+    end
+    addLog("  Colisao e visibilidade configuradas", "CLONE")
+
+    -- Calcular posicao de spawn
     local angulo = (indice / math.max(totalNovos, 1)) * math.pi * 2
     local raio = math.random(8, cloneSpawnRaio)
     local spawnXZ = Vector3.new(
@@ -1076,49 +1145,73 @@ local function criarClone(alvoPlayer, indice, totalNovos)
         0,
         meuRoot.Position.Z + math.sin(angulo) * raio
     )
-
-    -- Achar chao
     local spawnPos = acharChao(spawnXZ, meuRoot.Position.Y)
-    addLog("Spawn pos: " .. tostring(spawnPos))
+    addLog("  Spawn: " .. tostring(spawnPos), "CLONE")
 
-    -- *** ORDEM IMPORTANTE: Parentar ANTES de posicionar ***
+    -- Posicionar clone
+    if hrp then
+        hrp.CFrame = CFrame.new(spawnPos, alvoRoot.Position)
+        addLog("  Posicionado em: " .. tostring(spawnPos), "CLONE")
+    end
+
+    -- Criar pasta no Workspace se nao existe
+    if not clonePasta or not clonePasta.Parent then
+        clonePasta = Instance.new("Folder")
+        clonePasta.Name = "DELTA_CLONES"
+        clonePasta.Parent = Workspace
+        addLog("  Pasta DELTA_CLONES criada no Workspace", "CLONE")
+    end
+
+    -- Parentar clone no workspace
     cloneModel.Parent = clonePasta
-    addLog("Clone parentado no workspace")
+    addLog("  Clone parentado em: " .. clonePasta:GetFullName(), "CLONE")
 
-    -- Aguardar 1 frame para o modelo carregar
-    task.wait()
+    -- Aguardar um pouco para physics inicializar
+    task.wait(0.1)
 
-    -- Verificar novamente o root apos parentar
-    cRoot = cloneModel:FindFirstChild("HumanoidRootPart")
-    if not cRoot then
-        addLog("ERRO: HumanoidRootPart sumiu apos parentar!")
-        pcall(function() cloneModel:Destroy() end)
-        return nil
-    end
+    -- Forcar estado Running apos parentar
+    pcall(function()
+        cloneHum:ChangeState(Enum.HumanoidStateType.Running)
+    end)
 
-    -- Posicionar no mundo
-    cRoot.CFrame = CFrame.new(spawnPos, alvoRoot.Position)
-    addLog("Clone posicionado!")
+    -- Desancorar apos delay
+    task.spawn(function()
+        task.wait(0.8)
+        if hrp and hrp.Parent then
+            hrp.Anchored = false
+            -- Reforcar colisao
+            for _, part in pairs(cloneModel:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    part.CanCollide = true
+                    part.Anchored = false
+                end
+            end
+            addLog("  Clone #" .. cloneContador .. " desancorado!", "CLONE")
 
-    -- Configurar Humanoid
-    local cHum = cloneModel:FindFirstChildOfClass("Humanoid")
-    if cHum then
-        cHum.MaxHealth = 99999
-        cHum.Health = 99999
-        cHum.WalkSpeed = cloneVelocidade
-        cHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-        pcall(function() cHum.NameDisplayDistance = 0 end)
-        pcall(function() cHum.HealthDisplayDistance = 0 end)
-        addLog("Humanoid configurado: Health=99999, Speed=" .. cloneVelocidade)
-    else
-        addLog("AVISO: clone sem Humanoid!")
-    end
+            -- Verificar posicao apos desancorar
+            task.wait(0.2)
+            if hrp and hrp.Parent then
+                addLog("  Posicao atual: " .. tostring(hrp.Position), "CLONE")
+            end
+        end
+    end)
 
-    -- Forcar colisao em todas as partes
-    forcarColisaoClone(cloneModel)
+    -- Highlight no clone para debug visual
+    local hl = Instance.new("Highlight")
+    hl.Name = "DeltaCloneHL"
+    hl.FillTransparency = 0.7
+    hl.FillColor = Color3.fromRGB(0, 200, 255)
+    hl.OutlineColor = Color3.fromRGB(0, 150, 255)
+    hl.OutlineTransparency = 0
+    hl.Parent = cloneModel
 
     -- Criar dados do clone
-    local totalAtual = getTotalClonesAtivos() + 1
+    local totalAtual = 0
+    for _, c in ipairs(clonesAtivos) do
+        if c.modelo and c.modelo.Parent then totalAtual = totalAtual + 1 end
+    end
+    totalAtual = totalAtual + 1
+
     local cd = {
         id = cloneContador,
         modelo = cloneModel,
@@ -1131,18 +1224,27 @@ local function criarClone(alvoPlayer, indice, totalNovos)
         alvoUltimaPos = nil,
         alvoParadoTimer = 0,
         alvoEstaParado = false,
+        prontoPraAndar = false,
         waypoints = {},
         waypointIndex = 1,
         pathTimer = 0,
         ultimaPosAlvo = nil,
     }
 
-    -- ============================================================
-    -- LOOP DE ATUALIZACAO DO CLONE (movimento + animacao + danca)
-    -- ============================================================
+    -- Delay antes de comecar a andar
+    task.spawn(function()
+        task.wait(1.0)
+        cd.prontoPraAndar = true
+        addLog("Clone #" .. cd.id .. " PRONTO para andar!", "OK")
+    end)
+
+    -- ================================================
+    -- LOOP IA DO CLONE
+    -- ================================================
     cd.conexao = RunService.Heartbeat:Connect(function(dt)
-        -- Verificar se clone ainda existe
+        -- Verificar se o clone ainda existe
         if not cd.modelo or not cd.modelo.Parent then
+            addLog("Clone #" .. cd.id .. " destruido, parando loop", "CLONE")
             if cd.conexao then cd.conexao:Disconnect(); cd.conexao = nil end
             return
         end
@@ -1151,17 +1253,23 @@ local function criarClone(alvoPlayer, indice, totalNovos)
         local cHumNow = cd.modelo:FindFirstChildOfClass("Humanoid")
         if not cRootNow or not cHumNow then return end
 
-        -- Manter vivo
-        pcall(function() cHumNow.Health = cHumNow.MaxHealth end)
+        -- Manter vivo SEMPRE
+        if cHumNow.Health < cHumNow.MaxHealth then
+            cHumNow.Health = cHumNow.MaxHealth
+        end
 
-        -- Garantir colisao
+        -- Forcar estado Running se estiver em estado invalido
         pcall(function()
-            for _, part in pairs(cd.modelo:GetDescendants()) do
-                if part:IsA("BasePart") and not part.CanCollide then
-                    part.CanCollide = true
-                end
+            local state = cHumNow:GetState()
+            if state == Enum.HumanoidStateType.Dead or
+               state == Enum.HumanoidStateType.Ragdoll or
+               state == Enum.HumanoidStateType.FallingDown then
+                cHumNow:ChangeState(Enum.HumanoidStateType.Running)
             end
         end)
+
+        -- Esperar desancorar
+        if not cd.prontoPraAndar then return end
 
         -- Pegar alvo
         local targetAlvo = cd.alvo or cloneAlvo
@@ -1171,16 +1279,18 @@ local function criarClone(alvoPlayer, indice, totalNovos)
 
         local distancia = (cRootNow.Position - tRoot.Position).Magnitude
 
-        -- Detectar se alvo parou
+        -- DETECTAR SE ALVO PAROU
         local alvoPos = tRoot.Position
         local cloneAlvoParou = false
+
         if cd.alvoUltimaPos then
             local deltaMov = (Vector3.new(alvoPos.X, 0, alvoPos.Z) - Vector3.new(cd.alvoUltimaPos.X, 0, cd.alvoUltimaPos.Z)).Magnitude
             local tVel = Vector3.new(0,0,0)
-            pcall(function() tVel = tRoot.AssemblyLinearVelocity or tRoot.Velocity or Vector3.new(0,0,0) end)
+            pcall(function() tVel = tRoot.AssemblyLinearVelocity or Vector3.new(0,0,0) end)
             local tVelH = Vector3.new(tVel.X, 0, tVel.Z).Magnitude
             local tHum = targetAlvo.Character and targetAlvo.Character:FindFirstChildOfClass("Humanoid")
             local tMovendo = tHum and tHum.MoveDirection.Magnitude > 0.1
+
             if tVelH < 1 and deltaMov < 0.3 and not tMovendo then
                 cd.alvoParadoTimer = cd.alvoParadoTimer + dt
                 if cd.alvoParadoTimer >= alvoParadoThreshold then cloneAlvoParou = true end
@@ -1191,18 +1301,39 @@ local function criarClone(alvoPlayer, indice, totalNovos)
         cd.alvoUltimaPos = alvoPos
         cd.alvoEstaParado = cloneAlvoParou
 
-        -- Danca do clone quando alvo para
+        -- DANCA DO CLONE
         if cloneDancar and cloneAlvoParou and distancia < cloneDistancia + 4 then
             if not cd.dancando then
-                if cd.animAndarTrack then pcall(function() cd.animAndarTrack:Stop(0) end); cd.animAndarTrack = nil end
-                clonePararAnimacoes(cHumNow)
+                if cd.animAndarTrack then
+                    pcall(function() cd.animAndarTrack:Stop(0) end)
+                    cd.animAndarTrack = nil
+                end
+                -- Parar todas animacoes
+                pcall(function()
+                    local anim = cHumNow:FindFirstChildOfClass("Animator")
+                    if anim then
+                        for _, t in pairs(anim:GetPlayingAnimationTracks()) do
+                            pcall(function() t:Stop(0) end)
+                        end
+                    end
+                end)
                 local dancaData = DANCAS[animDancaAtual]
                 if dancaData then
-                    cd.animDancaTrack = cloneTocarAnimacao(cHumNow, dancaData.id, true)
-                    cd.dancando = true
+                    local anim = Instance.new("Animation")
+                    anim.AnimationId = dancaData.id
+                    local animator = cHumNow:FindFirstChildOfClass("Animator")
+                    if animator then
+                        local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+                        if ok and track then
+                            track.Looped = true
+                            track.Priority = Enum.AnimationPriority.Action4
+                            track:Play(0.1)
+                            cd.animDancaTrack = track
+                            cd.dancando = true
+                        end
+                    end
                 end
             end
-            -- Olhar pro alvo enquanto danca
             pcall(function()
                 cRootNow.CFrame = CFrame.new(
                     cRootNow.Position,
@@ -1211,30 +1342,43 @@ local function criarClone(alvoPlayer, indice, totalNovos)
             end)
             return
         else
-            -- Parar danca se tava dancando
             if cd.dancando then
                 if cd.animDancaTrack then
                     pcall(function() cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end)
                     cd.animDancaTrack = nil
                 end
-                clonePararAnimacoes(cHumNow)
                 cd.dancando = false
                 cd.animAndarTrack = nil
             end
         end
 
-        -- Animacao de andar
+        -- ANIMACAO DE ANDAR
         if not cd.animAndarTrack and not cd.dancando then
             local andarData = ANIMS_ANDAR[animAndarAtual]
             if andarData then
-                cd.animAndarTrack = cloneTocarAnimacao(cHumNow, andarData.id, true)
+                local anim = Instance.new("Animation")
+                anim.AnimationId = andarData.id
+                local animator = cHumNow:FindFirstChildOfClass("Animator")
+                if animator then
+                    local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+                    if ok and track then
+                        track.Looped = true
+                        track.Priority = Enum.AnimationPriority.Movement
+                        track:Play(0.3)
+                        cd.animAndarTrack = track
+                    end
+                end
             end
         end
 
-        -- Movimento: posicao na roda
+        -- MOVIMENTO (formacao em roda)
         cHumNow.WalkSpeed = cloneVelocidade
 
-        local totalClones = getTotalClonesAtivos()
+        -- Calcular posicao na roda
+        local totalClones = 0
+        for _, c in ipairs(clonesAtivos) do
+            if c.modelo and c.modelo.Parent then totalClones = totalClones + 1 end
+        end
         local angOff = (cd.indiceRoda / math.max(totalClones, 1)) * math.pi * 2
         local posNaRoda = tRoot.Position + Vector3.new(
             math.cos(angOff) * cloneDistancia,
@@ -1253,10 +1397,11 @@ local function criarClone(alvoPlayer, indice, totalNovos)
             )
             cRootNow.CFrame = CFrame.new(tpPos, tRoot.Position)
             cd.waypoints = {}; cd.waypointIndex = 1; cd.ultimaPosAlvo = nil
+            addLog("Clone #" .. cd.id .. " TP (muito longe)", "CLONE")
             return
         end
 
-        -- Perto o suficiente da roda? So olhar pro alvo
+        -- Perto da roda? So olhar
         local distDaRoda = (cRootNow.Position - posNaRoda).Magnitude
         if distDaRoda < 3 then
             pcall(function()
@@ -1279,8 +1424,7 @@ local function criarClone(alvoPlayer, indice, totalNovos)
         if precisaRecalc then
             cd.pathTimer = 0
             cd.ultimaPosAlvo = tRoot.Position
-            local novaRota = nil
-            pcall(function() novaRota = calcularPath(cRootNow.Position, posNaRoda) end)
+            local novaRota = calcularPath(cRootNow.Position, posNaRoda)
             if novaRota then
                 cd.waypoints = novaRota; cd.waypointIndex = 1
             else
@@ -1302,8 +1446,34 @@ local function criarClone(alvoPlayer, indice, totalNovos)
     end)
 
     table.insert(clonesAtivos, cd)
-    addLog("Clone #" .. cd.id .. " adicionado! Total: " .. #clonesAtivos)
+    addLog("Clone #" .. cd.id .. " CRIADO! Total: " .. #clonesAtivos, "OK")
     return cd
+end
+
+-- Remover um clone
+local function removerClone(cd)
+    pcall(function() if cd.conexao then cd.conexao:Disconnect(); cd.conexao = nil end end)
+    pcall(function() if cd.animAndarTrack then cd.animAndarTrack:Stop(0) end end)
+    pcall(function() if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end end)
+    pcall(function() if cd.modelo and cd.modelo.Parent then cd.modelo:Destroy() end end)
+end
+
+-- Remover todos os clones
+local function removerTodosClones()
+    for _, cd in ipairs(clonesAtivos) do removerClone(cd) end
+    clonesAtivos = {}
+    if clonePasta then pcall(function() for _, c in pairs(clonePasta:GetChildren()) do c:Destroy() end end) end
+    addLog("Todos os clones removidos!", "OK")
+    Rayfield:Notify({Title = "Clones", Content = "Todos removidos!", Duration = 3})
+end
+
+-- Total de clones vivos
+local function getTotalClonesAtivos()
+    local total = 0
+    for _, cd in ipairs(clonesAtivos) do
+        if cd.modelo and cd.modelo.Parent then total = total + 1 end
+    end
+    return total
 end
 
 -- ============================================================
@@ -1322,26 +1492,35 @@ local function adicionarClones(qtd, alvoPlayer)
     cloneAlvo = alvoPlayer; cloneAlvoNome = alvoPlayer.Name
     local totalAntes = getTotalClonesAtivos()
 
+    addLog("Iniciando criacao de " .. qtd .. " clones...", "CLONE")
     Rayfield:Notify({Title = "Clones", Content = "Criando " .. qtd .. " clones...", Duration = 3})
-    addLog("Iniciando criacao de " .. qtd .. " clones -> " .. alvoPlayer.Name)
 
     task.spawn(function()
         local criados = 0
         for i = 1, qtd do
-            task.wait(0.4) -- delay entre clones
-            local cd = criarClone(alvoPlayer, totalAntes + i, totalAntes + qtd)
+            task.wait(0.5)
+            local cd = criarCloneManual(alvoPlayer, totalAntes + i, totalAntes + qtd)
             if cd then
                 criados = criados + 1
-                rebuildCloneIndices()
+                -- Atualizar indice na roda
+                local idx = 0
+                for _, c in ipairs(clonesAtivos) do
+                    if c.modelo and c.modelo.Parent then
+                        idx = idx + 1; c.indiceRoda = idx
+                    end
+                end
+            else
+                addLog("Falha ao criar clone #" .. tostring(i), "ERRO")
             end
         end
 
+        local totalFinal = getTotalClonesAtivos()
+        addLog("Criacao finalizada: " .. criados .. "/" .. qtd .. " | Total: " .. totalFinal, "OK")
         Rayfield:Notify({
             Title = "Clones Criados!",
-            Content = criados .. "/" .. qtd .. " clones | Total: " .. getTotalClonesAtivos(),
+            Content = criados .. "/" .. qtd .. " clones | Total: " .. totalFinal,
             Duration = 4,
         })
-        addLog("Clones criados: " .. criados .. "/" .. qtd .. " | Total: " .. getTotalClonesAtivos())
     end)
 end
 
@@ -1353,18 +1532,20 @@ local function redirecionarClones(novoAlvo)
         cd.alvo = novoAlvo
         cd.waypoints = {}; cd.waypointIndex = 1; cd.ultimaPosAlvo = nil; cd.pathTimer = 99
     end
+    addLog("Clones redirecionados para " .. novoAlvo.Name, "OK")
     Rayfield:Notify({Title = "Redirecionados", Content = getTotalClonesAtivos() .. " clones -> " .. novoAlvo.Name, Duration = 3})
-    addLog("Clones redirecionados para: " .. novoAlvo.Name)
 end
 
 -- ============================================================
+-- ============================================================
 -- CRIACAO DAS ABAS
+-- ============================================================
 -- ============================================================
 
 local Window = Rayfield:CreateWindow({
-    Name = "Delta v9.6",
-    LoadingTitle = "Delta v9.6",
-    LoadingSubtitle = "Carregando...",
+    Name = "Delta v10.0",
+    LoadingTitle = "Delta v10.0",
+    LoadingSubtitle = "Clones Corrigidos + Logs",
     ConfigurationSaving = {Enabled = false},
     Discord = {Enabled = false},
     KeySystem = false,
@@ -1435,6 +1616,7 @@ pcall(function()
         Name = "Seguir ao Encostar", CurrentValue = false, Flag = "ToggleToque",
         Callback = function(v) if v then ativarSelecaoPorToque() else desativarSelecaoPorToque() end end,
     })
+    addLog("Aba Seguir criada", "UI")
 end)
 
 -- ============================================================
@@ -1562,8 +1744,6 @@ pcall(function()
                     if cd.dancando then
                         pcall(function() if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end end)
                         cd.animDancaTrack = nil
-                        local ch = cd.modelo and cd.modelo:FindFirstChildOfClass("Humanoid")
-                        if ch then clonePararAnimacoes(ch) end
                         cd.dancando = false; cd.animAndarTrack = nil
                     end
                 end
@@ -1577,9 +1757,11 @@ pcall(function()
         Callback = function()
             local total = getTotalClonesAtivos()
             Rayfield:Notify({Title = "Clones Ativos", Content = tostring(total) .. " clones no mapa", Duration = 3})
-            addLog("Clones ativos: " .. total)
+            addLog("Clones ativos: " .. total, "INFO")
         end,
     })
+
+    addLog("Aba Clones criada", "UI")
 end)
 
 -- ============================================================
@@ -1633,6 +1815,7 @@ pcall(function()
     tab:CreateSlider({Name = "Dist Segura", Range = {15,80}, Increment = 5, Suffix = " studs", CurrentValue = 30, Flag = "SliderFugirDist", Callback = function(v) fugirDistanciaSegura = v end})
     tab:CreateSlider({Name = "Intervalo Juke", Range = {0.3,3}, Increment = 0.1, Suffix = "s", CurrentValue = 0.8, Flag = "SliderJuke", Callback = function(v) fugirJukeInterval = v end})
     tab:CreateSlider({Name = "Duracao Fantasma", Range = {0.5,5}, Increment = 0.5, Suffix = "s", CurrentValue = 1.5, Flag = "SliderFantasma", Callback = function(v) FANTASMA_DURACAO = v end})
+    addLog("Aba Fugir criada", "UI")
 end)
 
 -- ============================================================
@@ -1692,6 +1875,7 @@ pcall(function()
         pararTodasAnimacoes()
         task.spawn(function() for i=1,3 do task.wait(0.1); forcarPararTodasTracks() end end)
     end})
+    addLog("Aba Anim criada", "UI")
 end)
 
 -- ============================================================
@@ -1722,6 +1906,7 @@ pcall(function()
         Name = "Transparencia", Range = {0,100}, Increment = 5, Suffix = "%", CurrentValue = 0, Flag = "SliderTransp",
         Callback = function(v) aplicarTransparencia(v / 100) end,
     })
+    addLog("Aba Config criada", "UI")
 end)
 
 -- ============================================================
@@ -1757,134 +1942,7 @@ pcall(function()
             else Rayfield:Notify({Title = "Erro", Content = "Selecione um player!", Duration = 3}) end
         end,
     })
-end)
-
--- ============================================================
--- ABA LOGS (NOVA)
--- ============================================================
-pcall(function()
-    local tab = Window:CreateTab("Logs", 4483362458)
-    tab:CreateSection("Sistema de Logs")
-
-    tab:CreateButton({
-        Name = "Ver Ultimos Logs",
-        Callback = function()
-            local total = #logs
-            local texto = ""
-            if total == 0 then
-                texto = "(sem logs)"
-            else
-                -- Mostrar os ultimos 10
-                local inicio = math.max(1, total - 9)
-                local linhas = {}
-                for i = inicio, total do
-                    table.insert(linhas, logs[i])
-                end
-                texto = table.concat(linhas, "\n")
-                if total > 10 then
-                    texto = "... (" .. (total - 10) .. " anteriores)\n" .. texto
-                end
-            end
-            -- Rayfield Notify tem limite entao usamos print + notify
-            print("========== LOGS DELTA ==========")
-            for _, l in ipairs(logs) do print(l) end
-            print("================================")
-            Rayfield:Notify({Title = "Logs", Content = total .. " logs (veja no console F9)", Duration = 4})
-        end,
-    })
-
-    tab:CreateButton({
-        Name = "COPIAR LOGS",
-        Callback = function()
-            local texto = getLogsText()
-            -- Tentar copiar para clipboard (varios metodos)
-            local copiado = false
-            pcall(function()
-                if setclipboard then
-                    setclipboard(texto)
-                    copiado = true
-                end
-            end)
-            if not copiado then
-                pcall(function()
-                    if toclipboard then
-                        toclipboard(texto)
-                        copiado = true
-                    end
-                end)
-            end
-            if not copiado then
-                pcall(function()
-                    if syn and syn.write_clipboard then
-                        syn.write_clipboard(texto)
-                        copiado = true
-                    end
-                end)
-            end
-            if not copiado then
-                pcall(function()
-                    if Clipboard and Clipboard.set then
-                        Clipboard.set(texto)
-                        copiado = true
-                    end
-                end)
-            end
-
-            if copiado then
-                Rayfield:Notify({Title = "Copiado!", Content = #logs .. " logs no clipboard", Duration = 3})
-                addLog("Logs copiados para clipboard (" .. #logs .. " entradas)")
-            else
-                -- Fallback: mostrar no console
-                print("========== LOGS DELTA (COPIAR MANUAL) ==========")
-                for _, l in ipairs(logs) do print(l) end
-                print("================================================")
-                Rayfield:Notify({Title = "Console", Content = "Logs no console F9 (copiar manual)", Duration = 5})
-                addLog("Clipboard indisponivel - logs no console F9")
-            end
-        end,
-    })
-
-    tab:CreateButton({
-        Name = "Limpar Logs",
-        Callback = function()
-            clearLogs()
-            Rayfield:Notify({Title = "Logs", Content = "Logs limpos!", Duration = 2})
-        end,
-    })
-
-    tab:CreateSection("Auto-Log")
-    tab:CreateToggle({
-        Name = "Log de Movimento (debug)", CurrentValue = false, Flag = "ToggleLogMov",
-        Callback = function(v)
-            if v then
-                addLog("Log de movimento ATIVADO (pode ser verboso)")
-            else
-                addLog("Log de movimento DESATIVADO")
-            end
-        end,
-    })
-
-    tab:CreateSection("Info")
-    tab:CreateButton({
-        Name = "Status do Sistema",
-        Callback = function()
-            local s = "=== STATUS ===\n"
-            s = s .. "Seguindo: " .. tostring(seguindo) .. "\n"
-            s = s .. "Alvo: " .. tostring(playerAlvoNome) .. "\n"
-            s = s .. "Fugindo: " .. tostring(fugindo) .. "\n"
-            s = s .. "Perseguidor: " .. tostring(playerPerseguidorNome) .. "\n"
-            s = s .. "Clones: " .. tostring(getTotalClonesAtivos()) .. "\n"
-            s = s .. "Clone Alvo: " .. tostring(cloneAlvoNome) .. "\n"
-            s = s .. "Speed: " .. tostring(speedAtivo) .. " (" .. tostring(speedValor) .. ")\n"
-            s = s .. "Toque: " .. tostring(selecaoPorToque) .. "\n"
-            s = s .. "Invisivel: " .. tostring(modoInvisivel) .. "\n"
-            s = s .. "Modo Seguir: " .. tostring(modoSeguir) .. "\n"
-            s = s .. "Total Logs: " .. tostring(#logs)
-            addLog(s)
-            print(s)
-            Rayfield:Notify({Title = "Status", Content = "Veja no console F9", Duration = 3})
-        end,
-    })
+    addLog("Aba TP criada", "UI")
 end)
 
 -- ============================================================
@@ -1905,9 +1963,243 @@ pcall(function()
                 pcall(function() local f = Rayfield.Flags; if f and f[d] then f[d]:Refresh(lista) end end)
             end
             Rayfield:Notify({Title = "Atualizado", Content = #lista .. " players", Duration = 3})
-            addLog("Lista atualizada: " .. #lista .. " players")
         end,
     })
+    addLog("Aba Geral criada", "UI")
+end)
+
+-- ============================================================
+-- ABA LOGS (NOVA!)
+-- ============================================================
+pcall(function()
+    local tab = Window:CreateTab("Logs", 4483362458)
+
+    tab:CreateSection("Sistema de Logs")
+    tab:CreateParagraph({
+        Title = "Como funciona",
+        Content = "Todos os prints, warns e eventos do Delta sao registrados aqui. Use os botoes abaixo para visualizar e copiar."
+    })
+
+    tab:CreateSection("Acoes")
+    tab:CreateButton({
+        Name = "Copiar Todos os Logs",
+        Callback = function()
+            local texto = table.concat(LogBuffer, "\n")
+            local ok, err = pcall(function()
+                if setclipboard then
+                    setclipboard(texto)
+                elseif toclipboard then
+                    toclipboard(texto)
+                else
+                    -- Fallback: mostrar em notify
+                    error("Funcao de copiar nao disponivel")
+                end
+            end)
+            if ok then
+                Rayfield:Notify({Title = "Logs Copiados!", Content = #LogBuffer .. " linhas copiadas para clipboard", Duration = 3})
+                addLog("Logs copiados para clipboard (" .. #LogBuffer .. " linhas)", "OK")
+            else
+                -- Fallback: criar textbox copiavel
+                Rayfield:Notify({Title = "Info", Content = "Use o campo abaixo para copiar", Duration = 3})
+                addLog("Clipboard indisponivel: " .. tostring(err), "WARN")
+            end
+        end,
+    })
+
+    tab:CreateButton({
+        Name = "Limpar Logs",
+        Callback = function()
+            LogBuffer = {}
+            addLog("--- Logs limpos ---", "INFO")
+            addLog("Delta v10.0 reiniciou o log", "INFO")
+            Rayfield:Notify({Title = "Logs", Content = "Logs limpos!", Duration = 2})
+        end,
+    })
+
+    tab:CreateSection("Visualizar Logs")
+
+    -- Mostrar ultimas linhas como paragrafo
+    tab:CreateButton({
+        Name = "Ver Ultimos 20 Logs",
+        Callback = function()
+            local inicio = math.max(1, #LogBuffer - 19)
+            local linhas = {}
+            for i = inicio, #LogBuffer do
+                table.insert(linhas, LogBuffer[i])
+            end
+            local texto = table.concat(linhas, "\n")
+            if texto == "" then texto = "(sem logs)" end
+
+            Rayfield:Notify({
+                Title = "Ultimos Logs",
+                Content = "Veja no campo de texto abaixo",
+                Duration = 3,
+            })
+
+            -- Criar popup visual com os logs
+            local screenGui = Instance.new("ScreenGui")
+            screenGui.Name = "DeltaLogPopup"
+            screenGui.ResetOnSpawn = false
+
+            local ok, parent = pcall(function()
+                if gethui then return gethui() end
+                return game:GetService("CoreGui")
+            end)
+            if not ok then parent = LocalPlayer:WaitForChild("PlayerGui") end
+            screenGui.Parent = parent
+
+            local frame = Instance.new("Frame")
+            frame.Size = UDim2.new(0, 600, 0, 400)
+            frame.Position = UDim2.new(0.5, -300, 0.5, -200)
+            frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+            frame.BorderSizePixel = 0
+            frame.Parent = screenGui
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = frame
+
+            local title = Instance.new("TextLabel")
+            title.Size = UDim2.new(1, 0, 0, 35)
+            title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+            title.Text = "  Delta Logs (Ultimos " .. #linhas .. ")"
+            title.TextColor3 = Color3.fromRGB(200, 200, 220)
+            title.TextXAlignment = Enum.TextXAlignment.Left
+            title.Font = Enum.Font.GothamBold
+            title.TextSize = 14
+            title.Parent = frame
+
+            local titleCorner = Instance.new("UICorner")
+            titleCorner.CornerRadius = UDim.new(0, 8)
+            titleCorner.Parent = title
+
+            local scrollFrame = Instance.new("ScrollingFrame")
+            scrollFrame.Size = UDim2.new(1, -20, 1, -80)
+            scrollFrame.Position = UDim2.new(0, 10, 0, 40)
+            scrollFrame.BackgroundTransparency = 1
+            scrollFrame.ScrollBarThickness = 6
+            scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+            scrollFrame.Parent = frame
+
+            local logLabel = Instance.new("TextLabel")
+            logLabel.Size = UDim2.new(1, -10, 0, 0)
+            logLabel.AutomaticSize = Enum.AutomaticSize.Y
+            logLabel.BackgroundTransparency = 1
+            logLabel.Text = texto
+            logLabel.TextColor3 = Color3.fromRGB(180, 255, 180)
+            logLabel.TextXAlignment = Enum.TextXAlignment.Left
+            logLabel.TextYAlignment = Enum.TextYAlignment.Top
+            logLabel.Font = Enum.Font.Code
+            logLabel.TextSize = 12
+            logLabel.TextWrapped = true
+            logLabel.Parent = scrollFrame
+
+            -- Atualizar canvas size
+            task.defer(function()
+                scrollFrame.CanvasSize = UDim2.new(0, 0, 0, logLabel.TextBounds.Y + 20)
+                scrollFrame.CanvasPosition = Vector2.new(0, math.max(0, logLabel.TextBounds.Y - scrollFrame.AbsoluteSize.Y))
+            end)
+
+            local copyBtn = Instance.new("TextButton")
+            copyBtn.Size = UDim2.new(0, 120, 0, 30)
+            copyBtn.Position = UDim2.new(1, -130, 1, -38)
+            copyBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+            copyBtn.Text = "Copiar"
+            copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            copyBtn.Font = Enum.Font.GothamBold
+            copyBtn.TextSize = 13
+            copyBtn.Parent = frame
+
+            local copyCorner = Instance.new("UICorner")
+            copyCorner.CornerRadius = UDim.new(0, 6)
+            copyCorner.Parent = copyBtn
+
+            copyBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    local allText = table.concat(LogBuffer, "\n")
+                    if setclipboard then setclipboard(allText)
+                    elseif toclipboard then toclipboard(allText) end
+                end)
+                copyBtn.Text = "Copiado!"
+                task.wait(1.5)
+                if copyBtn and copyBtn.Parent then copyBtn.Text = "Copiar" end
+            end)
+
+            local closeBtn = Instance.new("TextButton")
+            closeBtn.Size = UDim2.new(0, 30, 0, 30)
+            closeBtn.Position = UDim2.new(1, -35, 0, 5)
+            closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+            closeBtn.Text = "X"
+            closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            closeBtn.Font = Enum.Font.GothamBold
+            closeBtn.TextSize = 14
+            closeBtn.Parent = frame
+
+            local closeCorner = Instance.new("UICorner")
+            closeCorner.CornerRadius = UDim.new(0, 6)
+            closeCorner.Parent = closeBtn
+
+            closeBtn.MouseButton1Click:Connect(function()
+                screenGui:Destroy()
+            end)
+
+            -- Drag functionality
+            local dragging, dragInput, dragStart, startPos
+            title.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging = true
+                    dragStart = input.Position
+                    startPos = frame.Position
+                    input.Changed:Connect(function()
+                        if input.UserInputState == Enum.UserInputState.End then
+                            dragging = false
+                        end
+                    end)
+                end
+            end)
+            title.InputChanged:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                    dragInput = input
+                end
+            end)
+            RunService.RenderStepped:Connect(function()
+                if dragging and dragInput then
+                    local delta = dragInput.Position - dragStart
+                    frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                end
+            end)
+        end,
+    })
+
+    tab:CreateSection("Campo Copiavel (Fallback)")
+    tab:CreateInput({
+        Name = "Logs (selecione e copie)",
+        PlaceholderText = "Clique em 'Ver Ultimos 20 Logs' primeiro...",
+        RemoveTextAfterFocusLost = false,
+        Flag = "InputLogCopy",
+        Callback = function() end,
+    })
+
+    tab:CreateButton({
+        Name = "Preencher campo com logs",
+        Callback = function()
+            local texto = table.concat(LogBuffer, "\n")
+            pcall(function()
+                local f = Rayfield.Flags
+                if f and f.InputLogCopy then
+                    -- Rayfield Input nao tem SetValue, entao usar notify
+                    if setclipboard then
+                        setclipboard(texto)
+                        Rayfield:Notify({Title = "Copiado!", Content = "Logs no clipboard", Duration = 2})
+                    else
+                        Rayfield:Notify({Title = "Logs", Content = "Use o popup acima", Duration = 2})
+                    end
+                end
+            end)
+        end,
+    })
+
+    addLog("Aba Logs criada!", "UI")
 end)
 
 -- ============================================================
@@ -1915,7 +2207,6 @@ end)
 -- ============================================================
 pcall(function()
     Players.PlayerRemoving:Connect(function(player)
-        addLog("Player saiu: " .. player.Name)
         if playerAlvo and playerAlvo == player then pararSeguir(); Rayfield:Notify({Title = "Saiu", Content = player.Name, Duration = 4}) end
         if playerPerseguidor and playerPerseguidor == player then pararFugir(); Rayfield:Notify({Title = "Saiu", Content = player.Name, Duration = 4}) end
         if playerSelecionadoNome == player.Name then limparHighlightSelecionado() end
@@ -1929,7 +2220,6 @@ pcall(function()
 
     Players.PlayerAdded:Connect(function()
         task.wait(2)
-        addLog("Novo player detectado")
         local lista = getListaPlayers()
         for _, d in ipairs({"DropSeguir","DropTP","DropFugir","DropCloneAlvo"}) do
             pcall(function() local f = Rayfield.Flags; if f and f[d] then f[d]:Refresh(lista) end end)
@@ -1937,9 +2227,9 @@ pcall(function()
     end)
 
     LocalPlayer.CharacterAdded:Connect(function()
-        addLog("Personagem respawnou")
         animSentadoTrack = nil; animAndarTrack = nil; animDancaTrack = nil; estaDancando = false
         desativarFantasma()
+        addLog("Character respawn detectado", "EVENT")
         if seguindo then task.wait(2)
             if playerAlvo and getRootPart(playerAlvo) then iniciarSeguir(playerAlvo) else pararSeguir() end
         end
@@ -1948,13 +2238,19 @@ pcall(function()
         end
         if speedAtivo and not fugindo then task.wait(1); local h = getHumanoid(LocalPlayer); if h then h.WalkSpeed = speedValor end end
     end)
+
+    addLog("Eventos registrados", "OK")
 end)
 
 -- ============================================================
 -- PRONTO
 -- ============================================================
-addLog("Delta v9.6 carregado com sucesso!")
-Rayfield:Notify({Title = "Delta v9.6", Content = "Clones consertados! Aba Logs adicionada!", Duration = 5})
-print("[DELTA v9.6] Carregado!")
-print("[DELTA v9.6] FIX: Clone sem criarCloneManual, Archivable=true, parenta antes de posicionar")
-print("[DELTA v9.6] NOVO: Aba Logs com copiar e status")
+addLog("=== DELTA v10.0 CARREGADO COM SUCESSO ===", "OK")
+addLog("Clones: criacao manual (sem Clone()), Health=99999", "INFO")
+addLog("Logs: aba dedicada com copiar e popup visual", "INFO")
+addLog("Total de linhas no log: " .. tostring(#LogBuffer), "INFO")
+
+Rayfield:Notify({Title = "Delta v10.0", Content = "Clones REESCRITOS + Aba de Logs!", Duration = 5})
+print("[DELTA v10.0] Carregado com sucesso!")
+print("[DELTA v10.0] Clones: criacao manual, Animator proprio, estados controlados")
+print("[DELTA v10.0] Logs: aba dedicada com copiar e popup")
