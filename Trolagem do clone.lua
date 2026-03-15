@@ -1,67 +1,47 @@
 --[[
-    DELTA EXECUTOR - CLONE FOLLOWER v6 (CORRIGIDO)
-    Versao Estavel - Sem afetar o jogador
-    Fix: Motor6Ds completos, repulsao, clones nao ficam dentro do jogador
+    DELTA EXECUTOR - CLONE FOLLOWER v7
+    Versão Estável - Sem afetar o jogador
+    Correção: clones não ficam dentro do jogador
 ]]
 
---[ Configuracoes ]--
+--[ Configurações ]--
 local Config = {
-    FollowDistance = 6,
-    MinDistance = 3,
+    FollowDistance = 5,
     FollowSpeed = 16,
     CloneName = "Clone",
     MaxClones = 5,
-    SpawnDistance = 12
+    SpawnDistance = 10
 }
 
---[ Variaveis ]--
+--[ Variáveis ]--
 local Player = game.Players.LocalPlayer
 local Clones = {}
 local Following = false
 
 --[ Sistema de Log ]--
 local Logs = {}
+local LogText
+local gameLogFrame
+
 local function AddLog(msg, tipo)
     local t = {sucesso="✅", erro="❌", aviso="⚠️", info="ℹ️"}
-    local txt = string.format("[%s] %s %s", os.date("%H:%M:%S"), t[tipo]or"ℹ️", msg)
+    local txt = string.format("[%s] %s %s", os.date("%H:%M:%S"), t[tipo] or "ℹ️", msg)
     table.insert(Logs, 1, txt)
     if #Logs > 50 then table.remove(Logs) end
-    if gameLogFrame and gameLogFrame.Visible then LogText.Text = table.concat(Logs, "\n") end
+    if gameLogFrame and gameLogFrame.Visible and LogText then
+        LogText.Text = table.concat(Logs, "\n")
+    end
     print(txt)
 end
 
---[ HELPER: Criar Motor6D ]--
-local function CreateMotor6D(name, part0, part1, c0, c1)
-    local motor = Instance.new("Motor6D")
-    motor.Name = name
-    motor.Part0 = part0
-    motor.Part1 = part1
-    motor.C0 = c0
-    motor.C1 = c1
-    motor.Parent = part0
-    return motor
-end
-
---[ HELPER: Posicao de formacao ao redor do jogador ]--
-local function GetFormationOffset(index, total)
-    -- Distribui clones em circulo ao redor do jogador
-    local angle = (index / math.max(total, 1)) * math.pi * 2
-    return Vector3.new(
-        math.cos(angle) * Config.FollowDistance,
-        0,
-        math.sin(angle) * Config.FollowDistance
-    )
-end
-
---[ CRIACAO DO CLONE - MODO SEGURO ]--
+--[ CRIAÇÃO DO CLONE - MODO SEGURO ]--
 function CreateClone()
     pcall(function()
         if #Clones >= Config.MaxClones then
-            AddLog("Limite maximo: " .. Config.MaxClones, "aviso")
+            AddLog("Limite máximo: " .. Config.MaxClones, "aviso")
             return
         end
 
-        -- Espera personagem
         local char = Player.Character or Player.CharacterAdded:Wait()
         task.wait(0.3)
 
@@ -71,10 +51,9 @@ function CreateClone()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then AddLog("Sem HRP!", "erro") return end
 
-        -- Calcula posicao de spawn LONGE do jogador
-        local cloneIndex = #Clones + 1
-        local angle = (cloneIndex / Config.MaxClones) * math.pi * 2
-        local dist = Config.SpawnDistance + (cloneIndex * 3)
+        -- Calcula posição de spawn LONGE do jogador
+        local angle = math.random() * math.pi * 2
+        local dist = Config.SpawnDistance + (#Clones * 3)
         local spawnPos = Vector3.new(
             hrp.Position.X + math.cos(angle) * dist,
             hrp.Position.Y,
@@ -83,12 +62,12 @@ function CreateClone()
 
         AddLog("Spawn: " .. math.floor(spawnPos.X) .. "," .. math.floor(spawnPos.Z), "info")
 
-        -- Cria clone Model
+        -- Cria modelo do clone
         local clone = Instance.new("Model")
-        clone.Name = Config.CloneName .. cloneIndex
+        clone.Name = Config.CloneName .. (#Clones + 1)
         clone.Parent = workspace
 
-        -- Cria HRP do clone
+        -- Cria HRP do clone na posição de spawn
         local cloneHRP = Instance.new("Part")
         cloneHRP.Name = "HumanoidRootPart"
         cloneHRP.Size = Vector3.new(2, 2, 1)
@@ -98,18 +77,16 @@ function CreateClone()
         cloneHRP.Transparency = 1
         cloneHRP.Parent = clone
 
-        clone.PrimaryPart = cloneHRP
-
         -- Cria Humanoid
         local humanoid = Instance.new("Humanoid")
         humanoid.WalkSpeed = Config.FollowSpeed
         humanoid.PlatformStand = false
         humanoid.Parent = clone
 
-        -- Offset do spawn relativo ao jogador
-        local offset = spawnPos - hrp.Position
+        -- Offset do HRP original para o spawn
+        local hrpOffset = spawnPos - hrp.Position
 
-        -- Copia partes do corpo
+        -- Copia partes do corpo mantendo offset correto
         local partsToClone = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}
 
         for _, partName in pairs(partsToClone) do
@@ -118,69 +95,60 @@ function CreateClone()
                 local newPart = origPart:Clone()
                 newPart.Anchored = false
                 newPart.CanCollide = false
-                newPart.CFrame = origPart.CFrame + offset
+                -- Aplica o offset relativo ao HRP original
+                local relCFrame = hrp.CFrame:ToObjectSpace(origPart.CFrame)
+                newPart.CFrame = cloneHRP.CFrame:ToWorldSpace(relCFrame)
                 newPart.Parent = clone
             end
         end
 
         task.wait(0.1)
 
-        -- Pega referencias das partes do clone
-        local newHRP = clone:FindFirstChild("HumanoidRootPart")
         local newTorso = clone:FindFirstChild("Torso")
         local newHead = clone:FindFirstChild("Head")
-        local newLA = clone:FindFirstChild("Left Arm")
-        local newRA = clone:FindFirstChild("Right Arm")
-        local newLL = clone:FindFirstChild("Left Leg")
-        local newRL = clone:FindFirstChild("Right Leg")
+        local newHRP = clone:FindFirstChild("HumanoidRootPart")
 
-        -- CRIA TODOS OS MOTOR6Ds (isso e essencial para o Humanoid funcionar!)
-        if newHRP and newTorso then
-            -- RootJoint: HRP -> Torso
-            CreateMotor6D("RootJoint", newHRP, newTorso,
-                CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
-                CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
-            )
+        -- Motor6D: HRP → Torso
+        if newTorso and newHRP then
+            local origTorso = char:FindFirstChild("Torso")
+            local origHRP = hrp
+
+            local rootJoint = Instance.new("Motor6D")
+            rootJoint.Name = "RootJoint"
+            rootJoint.Part0 = newHRP
+            rootJoint.Part1 = newTorso
+            -- Usa os mesmos C0/C1 do personagem original se existir
+            local origRJ = origHRP:FindFirstChild("RootJoint")
+            if origRJ then
+                rootJoint.C0 = origRJ.C0
+                rootJoint.C1 = origRJ.C1
+            else
+                rootJoint.C0 = CFrame.new(0, -1, 0) * CFrame.Angles(-math.pi/2, 0, math.pi)
+                rootJoint.C1 = CFrame.new(0, -1, 0) * CFrame.Angles(-math.pi/2, 0, math.pi)
+            end
+            rootJoint.Parent = newHRP
         end
 
-        if newTorso and newHead then
-            -- Neck: Torso -> Head
-            CreateMotor6D("Neck", newTorso, newHead,
-                CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
-                CFrame.new(0, -0.5, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
-            )
-        end
-
-        if newTorso and newLA then
-            -- Left Shoulder: Torso -> Left Arm
-            CreateMotor6D("Left Shoulder", newTorso, newLA,
-                CFrame.new(-1, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
-                CFrame.new(0.5, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0)
-            )
-        end
-
-        if newTorso and newRA then
-            -- Right Shoulder: Torso -> Right Arm
-            CreateMotor6D("Right Shoulder", newTorso, newRA,
-                CFrame.new(1, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
-                CFrame.new(-0.5, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0)
-            )
-        end
-
-        if newTorso and newLL then
-            -- Left Hip: Torso -> Left Leg
-            CreateMotor6D("Left Hip", newTorso, newLL,
-                CFrame.new(-1, -1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
-                CFrame.new(-0.5, 1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0)
-            )
-        end
-
-        if newTorso and newRL then
-            -- Right Hip: Torso -> Right Leg
-            CreateMotor6D("Right Hip", newTorso, newRL,
-                CFrame.new(1, -1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
-                CFrame.new(0.5, 1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0)
-            )
+        -- Conecta joints entre Torso e membros (copia do personagem original)
+        if newTorso then
+            local origTorso = char:FindFirstChild("Torso")
+            if origTorso then
+                for _, joint in pairs(origTorso:GetChildren()) do
+                    if joint:IsA("Motor6D") then
+                        local newJoint = joint:Clone()
+                        -- Atualiza referências para as partes do clone
+                        local p0Name = joint.Part0 and joint.Part0.Name
+                        local p1Name = joint.Part1 and joint.Part1.Name
+                        local clonePart0 = p0Name and clone:FindFirstChild(p0Name)
+                        local clonePart1 = p1Name and clone:FindFirstChild(p1Name)
+                        if clonePart0 and clonePart1 then
+                            newJoint.Part0 = clonePart0
+                            newJoint.Part1 = clonePart1
+                            newJoint.Parent = newTorso
+                        end
+                    end
+                end
+            end
         end
 
         -- Face
@@ -196,30 +164,18 @@ function CreateClone()
             end
         end
 
-        -- Acessorios
-        for _, child in pairs(char:GetChildren()) do
-            if child:IsA("Accessory") then
-                pcall(function()
-                    child:Clone().Parent = clone
-                end)
-            end
-        end
+        -- Define PrimaryPart para MoveTo funcionar corretamente
+        clone.PrimaryPart = cloneHRP
 
         table.insert(Clones, clone)
         Following = true
-
-        -- Teleporta clone para posicao correta DEPOIS de montar tudo
-        task.wait(0.2)
-        if clone.PrimaryPart then
-            clone:SetPrimaryPartCFrame(CFrame.new(spawnPos))
-        end
 
         AddLog("Clone #" .. #Clones .. " criado!", "sucesso")
     end)
 end
 
---[ MOVIMENTO - COM REPULSAO ]--
-function MoveClone(clone, index)
+--[ MOVIMENTO ]--
+function MoveClone(clone)
     pcall(function()
         if not Following then return end
 
@@ -229,62 +185,28 @@ function MoveClone(clone, index)
 
         if not cloneHRP or not playerHRP or not humanoid then return end
 
-        local diff = cloneHRP.Position - playerHRP.Position
-        local dist = diff.Magnitude
+        local dist = (playerHRP.Position - cloneHRP.Position).Magnitude
 
-        -- Calcula posicao alvo em formacao ao redor do jogador
-        local formationOffset = GetFormationOffset(index, #Clones)
-        local targetPos = playerHRP.Position + formationOffset
+        if dist > Config.FollowDistance then
+            local dir = (playerHRP.Position - cloneHRP.Position).Unit
+            -- Para a FollowDistance studs do jogador, nunca dentro dele
+            local target = playerHRP.Position - (dir * Config.FollowDistance)
 
-        -- REPULSAO: Se muito perto, empurra para fora imediatamente
-        if dist < Config.MinDistance then
-            local pushDir
-            if dist < 0.1 then
-                -- Se praticamente sobreposto, escolhe direcao baseada no index
-                local pushAngle = (index / math.max(#Clones, 1)) * math.pi * 2
-                pushDir = Vector3.new(math.cos(pushAngle), 0, math.sin(pushAngle))
-            else
-                pushDir = (diff * Vector3.new(1, 0, 1)).Unit
-            end
-            -- Teleporta para fora imediatamente
-            local safePos = playerHRP.Position + pushDir * Config.FollowDistance
-            cloneHRP.CFrame = CFrame.new(
-                safePos.X,
-                playerHRP.Position.Y,
-                safePos.Z
-            )
-            AddLog("Clone #" .. index .. " reposicionado (muito perto)", "aviso")
-            return
-        end
-
-        -- Movimento normal: vai ate a posicao de formacao
-        local distToTarget = (targetPos - cloneHRP.Position).Magnitude
-
-        if distToTarget > 1 then
             humanoid.WalkSpeed = Config.FollowSpeed
-            humanoid:MoveTo(targetPos)
-            -- Faz o clone olhar pro jogador
+            humanoid:MoveTo(target)
+            -- Faz o clone olhar para o jogador
             cloneHRP.CFrame = CFrame.new(cloneHRP.Position, Vector3.new(playerHRP.Position.X, cloneHRP.Position.Y, playerHRP.Position.Z))
-        end
-
-        -- Se ficou muito longe, teleporta pra perto
-        if dist > 50 then
-            local tp = playerHRP.Position + formationOffset
-            cloneHRP.CFrame = CFrame.new(tp.X, playerHRP.Position.Y, tp.Z)
-            AddLog("Clone #" .. index .. " teleportado (muito longe)", "info")
         end
     end)
 end
 
---[ Loop ]--
+--[ Loop de Movimento ]--
 task.spawn(function()
     while true do
         pcall(function()
             if Following then
-                for i, c in pairs(Clones) do
-                    if c and c.Parent then
-                        MoveClone(c, i)
-                    end
+                for _, c in pairs(Clones) do
+                    if c and c.Parent then MoveClone(c) end
                 end
             end
         end)
@@ -323,9 +245,8 @@ mf.Draggable = true
 mf.Parent = sg
 Instance.new("UICorner", mf).CornerRadius = UDim.new(0, 15)
 
--- Titulo
 local tl = Instance.new("TextLabel")
-tl.Text = "👤 Clone Follower v6"
+tl.Text = "👤 Clone Follower v7"
 tl.Size = UDim2.new(1, 0, 0, 40)
 tl.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 tl.TextColor3 = Color3.new(1, 1, 1)
@@ -333,7 +254,6 @@ tl.Font = Enum.Font.GothamBold
 tl.Parent = mf
 Instance.new("UICorner", tl).CornerRadius = UDim.new(0, 15)
 
--- Minimizar
 local minBtn = Instance.new("TextButton")
 minBtn.Text = "—"
 minBtn.Size = UDim2.new(0, 30, 0, 25)
@@ -350,14 +270,12 @@ minBtn.MouseButton1Click:Connect(function()
     minBtn.Text = minimized and "+" or "—"
 end)
 
--- Container
 local ct = Instance.new("Frame")
 ct.Size = UDim2.new(1, -20, 1, -50)
 ct.Position = UDim2.new(0, 10, 0, 45)
 ct.BackgroundTransparency = 1
 ct.Parent = mf
 
--- +
 local addBtn = Instance.new("TextButton")
 addBtn.Text = "+"
 addBtn.Size = UDim2.new(0, 45, 0, 40)
@@ -369,7 +287,6 @@ addBtn.Parent = ct
 Instance.new("UICorner", addBtn).CornerRadius = UDim.new(0, 8)
 addBtn.MouseButton1Click:Connect(CreateClone)
 
--- Criar
 local crBtn = Instance.new("TextButton")
 crBtn.Text = "🎭 CRIAR CLONE"
 crBtn.Size = UDim2.new(1, -55, 0, 40)
@@ -381,7 +298,6 @@ crBtn.Parent = ct
 Instance.new("UICorner", crBtn).CornerRadius = UDim.new(0, 8)
 crBtn.MouseButton1Click:Connect(CreateClone)
 
--- Deletar
 local delBtn = Instance.new("TextButton")
 delBtn.Text = "🗑️ DELETAR"
 delBtn.Size = UDim2.new(0.48, 0, 0, 35)
@@ -393,7 +309,6 @@ delBtn.Parent = ct
 Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 8)
 delBtn.MouseButton1Click:Connect(DeleteClone)
 
--- Todos
 local delAllBtn = Instance.new("TextButton")
 delAllBtn.Text = "🗑️ TODOS"
 delAllBtn.Size = UDim2.new(0.48, 0, 0, 35)
@@ -405,7 +320,6 @@ delAllBtn.Parent = ct
 Instance.new("UICorner", delAllBtn).CornerRadius = UDim.new(0, 8)
 delAllBtn.MouseButton1Click:Connect(DeleteAll)
 
--- Logs
 local logBtn = Instance.new("TextButton")
 logBtn.Text = "📋 VER LOGS"
 logBtn.Size = UDim2.new(1, 0, 0, 35)
@@ -416,7 +330,6 @@ logBtn.Font = Enum.Font.GothamBold
 logBtn.Parent = ct
 Instance.new("UICorner", logBtn).CornerRadius = UDim.new(0, 8)
 
--- Status
 local status = Instance.new("TextLabel")
 status.Text = "❌ Sem clone"
 status.Size = UDim2.new(1, 0, 0, 30)
@@ -427,7 +340,6 @@ status.Font = Enum.Font.Gotham
 status.Parent = ct
 Instance.new("UICorner", status).CornerRadius = UDim.new(0, 6)
 
--- Info
 local info = Instance.new("TextLabel")
 info.Text = "📍 Dist: " .. Config.FollowDistance .. " | Spawn: " .. Config.SpawnDistance .. " | 👥: 0/" .. Config.MaxClones
 info.Size = UDim2.new(1, 0, 0, 25)
@@ -443,7 +355,7 @@ local lg = Instance.new("ScreenGui")
 lg.Name = "LogGui"
 lg.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
 
-local gameLogFrame = Instance.new("Frame")
+gameLogFrame = Instance.new("Frame")
 gameLogFrame.Size = UDim2.new(0, 450, 0, 280)
 gameLogFrame.Position = UDim2.new(0.5, -225, 0.5, -140)
 gameLogFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
@@ -479,7 +391,7 @@ ls.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 ls.ScrollBarThickness = 5
 ls.Parent = gameLogFrame
 
-local LogText = Instance.new("TextLabel")
+LogText = Instance.new("TextLabel")
 LogText.Size = UDim2.new(1, 0, 0, 0)
 LogText.BackgroundTransparency = 1
 LogText.TextColor3 = Color3.new(0.8, 0.8, 0.8)
@@ -529,6 +441,6 @@ task.spawn(function()
     end
 end)
 
-AddLog("Clone Follower v6 iniciado!", "sucesso")
-AddLog("Versao estavel - nao afeta o jogador", "info")
+AddLog("Clone Follower v7 iniciado!", "sucesso")
+AddLog("Versão estável - não afeta o jogador", "info")
 AddLog("Spawn distance: " .. Config.SpawnDistance .. " studs", "info")
