@@ -1,7 +1,7 @@
 --[[
     DELTA EXECUTOR - CLONE FOLLOWER v7
     Versão Estável - Sem afetar o jogador
-    Correção: clones não ficam dentro do jogador
+    Fix: clona o personagem inteiro, sem montar joint manualmente
 ]]
 
 --[ Configurações ]--
@@ -10,7 +10,7 @@ local Config = {
     FollowSpeed = 16,
     CloneName = "Clone",
     MaxClones = 5,
-    SpawnDistance = 10
+    SpawnDistance = 12
 }
 
 --[ Variáveis ]--
@@ -24,7 +24,7 @@ local LogText
 local gameLogFrame
 
 local function AddLog(msg, tipo)
-    local t = {sucesso="✅", erro="❌", aviso="⚠️", info="ℹ️"}
+    local t = {sucesso = "✅", erro = "❌", aviso = "⚠️", info = "ℹ️"}
     local txt = string.format("[%s] %s %s", os.date("%H:%M:%S"), t[tipo] or "ℹ️", msg)
     table.insert(Logs, 1, txt)
     if #Logs > 50 then table.remove(Logs) end
@@ -34,7 +34,7 @@ local function AddLog(msg, tipo)
     print(txt)
 end
 
---[ CRIAÇÃO DO CLONE - MODO SEGURO ]--
+--[ CRIAÇÃO DO CLONE ]--
 function CreateClone()
     pcall(function()
         if #Clones >= Config.MaxClones then
@@ -43,17 +43,16 @@ function CreateClone()
         end
 
         local char = Player.Character or Player.CharacterAdded:Wait()
-        task.wait(0.3)
-
+        task.wait(0.2)
         char = Player.Character
         if not char then AddLog("Sem personagem!", "erro") return end
 
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then AddLog("Sem HRP!", "erro") return end
 
-        -- Calcula posição de spawn LONGE do jogador
+        -- Posição de spawn: longe do jogador, ângulo aleatório
         local angle = math.random() * math.pi * 2
-        local dist = Config.SpawnDistance + (#Clones * 3)
+        local dist = Config.SpawnDistance + (#Clones * 4)
         local spawnPos = Vector3.new(
             hrp.Position.X + math.cos(angle) * dist,
             hrp.Position.Y,
@@ -62,114 +61,50 @@ function CreateClone()
 
         AddLog("Spawn: " .. math.floor(spawnPos.X) .. "," .. math.floor(spawnPos.Z), "info")
 
-        -- Cria modelo do clone
-        local clone = Instance.new("Model")
+        -- Clona o personagem INTEIRO (joints, meshes, roupas já incluídos)
+        local clone = char:Clone()
         clone.Name = Config.CloneName .. (#Clones + 1)
+
+        -- Remove scripts do clone para não interferir
+        for _, v in pairs(clone:GetDescendants()) do
+            if v:IsA("BaseScript") or v:IsA("ModuleScript") then
+                v:Destroy()
+            end
+        end
+
+        -- Desativa colisão em todas as partes do clone
+        for _, v in pairs(clone:GetDescendants()) do
+            if v:IsA("BasePart") then
+                v.CanCollide = false
+            end
+        end
+
+        -- Ajusta o Humanoid do clone
+        local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
+        if cloneHumanoid then
+            cloneHumanoid.WalkSpeed = Config.FollowSpeed
+            cloneHumanoid.PlatformStand = false
+            cloneHumanoid.AutoJumpEnabled = true
+        end
+
         clone.Parent = workspace
 
-        -- Cria HRP do clone na posição de spawn
-        local cloneHRP = Instance.new("Part")
-        cloneHRP.Name = "HumanoidRootPart"
-        cloneHRP.Size = Vector3.new(2, 2, 1)
-        cloneHRP.CFrame = CFrame.new(spawnPos)
-        cloneHRP.Anchored = false
-        cloneHRP.CanCollide = false
-        cloneHRP.Transparency = 1
-        cloneHRP.Parent = clone
-
-        -- Cria Humanoid
-        local humanoid = Instance.new("Humanoid")
-        humanoid.WalkSpeed = Config.FollowSpeed
-        humanoid.PlatformStand = false
-        humanoid.Parent = clone
-
-        -- Offset do HRP original para o spawn
-        local hrpOffset = spawnPos - hrp.Position
-
-        -- Copia partes do corpo mantendo offset correto
-        local partsToClone = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}
-
-        for _, partName in pairs(partsToClone) do
-            local origPart = char:FindFirstChild(partName)
-            if origPart then
-                local newPart = origPart:Clone()
-                newPart.Anchored = false
-                newPart.CanCollide = false
-                -- Aplica o offset relativo ao HRP original
-                local relCFrame = hrp.CFrame:ToObjectSpace(origPart.CFrame)
-                newPart.CFrame = cloneHRP.CFrame:ToWorldSpace(relCFrame)
-                newPart.Parent = clone
-            end
+        -- Teleporta o clone para o spawn ANTES de liberar a física
+        local cloneHRP = clone:FindFirstChild("HumanoidRootPart")
+        if cloneHRP then
+            -- Ancora momentaneamente para teletransportar sem drift de física
+            cloneHRP.Anchored = true
+            clone:SetPrimaryPartCFrame(CFrame.new(spawnPos))
+            task.wait(0.05)
+            cloneHRP.Anchored = false
+        else
+            AddLog("Clone sem HRP!", "erro")
+            clone:Destroy()
+            return
         end
-
-        task.wait(0.1)
-
-        local newTorso = clone:FindFirstChild("Torso")
-        local newHead = clone:FindFirstChild("Head")
-        local newHRP = clone:FindFirstChild("HumanoidRootPart")
-
-        -- Motor6D: HRP → Torso
-        if newTorso and newHRP then
-            local origTorso = char:FindFirstChild("Torso")
-            local origHRP = hrp
-
-            local rootJoint = Instance.new("Motor6D")
-            rootJoint.Name = "RootJoint"
-            rootJoint.Part0 = newHRP
-            rootJoint.Part1 = newTorso
-            -- Usa os mesmos C0/C1 do personagem original se existir
-            local origRJ = origHRP:FindFirstChild("RootJoint")
-            if origRJ then
-                rootJoint.C0 = origRJ.C0
-                rootJoint.C1 = origRJ.C1
-            else
-                rootJoint.C0 = CFrame.new(0, -1, 0) * CFrame.Angles(-math.pi/2, 0, math.pi)
-                rootJoint.C1 = CFrame.new(0, -1, 0) * CFrame.Angles(-math.pi/2, 0, math.pi)
-            end
-            rootJoint.Parent = newHRP
-        end
-
-        -- Conecta joints entre Torso e membros (copia do personagem original)
-        if newTorso then
-            local origTorso = char:FindFirstChild("Torso")
-            if origTorso then
-                for _, joint in pairs(origTorso:GetChildren()) do
-                    if joint:IsA("Motor6D") then
-                        local newJoint = joint:Clone()
-                        -- Atualiza referências para as partes do clone
-                        local p0Name = joint.Part0 and joint.Part0.Name
-                        local p1Name = joint.Part1 and joint.Part1.Name
-                        local clonePart0 = p0Name and clone:FindFirstChild(p0Name)
-                        local clonePart1 = p1Name and clone:FindFirstChild(p1Name)
-                        if clonePart0 and clonePart1 then
-                            newJoint.Part0 = clonePart0
-                            newJoint.Part1 = clonePart1
-                            newJoint.Parent = newTorso
-                        end
-                    end
-                end
-            end
-        end
-
-        -- Face
-        local origHead = char:FindFirstChild("Head")
-        if origHead and newHead and origHead:FindFirstChild("face") then
-            origHead:FindFirstChild("face"):Clone().Parent = newHead
-        end
-
-        -- Roupas
-        for _, child in pairs(char:GetChildren()) do
-            if child:IsA("Shirt") or child:IsA("Pants") or child:IsA("BodyColors") then
-                child:Clone().Parent = clone
-            end
-        end
-
-        -- Define PrimaryPart para MoveTo funcionar corretamente
-        clone.PrimaryPart = cloneHRP
 
         table.insert(Clones, clone)
         Following = true
-
         AddLog("Clone #" .. #Clones .. " criado!", "sucesso")
     end)
 end
@@ -181,21 +116,18 @@ function MoveClone(clone)
 
         local cloneHRP = clone:FindFirstChild("HumanoidRootPart")
         local playerHRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-        local humanoid = clone:FindFirstChild("Humanoid")
+        local humanoid = clone:FindFirstChildOfClass("Humanoid")
 
         if not cloneHRP or not playerHRP or not humanoid then return end
+        if humanoid.Health <= 0 then return end
 
         local dist = (playerHRP.Position - cloneHRP.Position).Magnitude
 
         if dist > Config.FollowDistance then
             local dir = (playerHRP.Position - cloneHRP.Position).Unit
-            -- Para a FollowDistance studs do jogador, nunca dentro dele
+            -- Para EXATAMENTE FollowDistance studs atrás do jogador
             local target = playerHRP.Position - (dir * Config.FollowDistance)
-
-            humanoid.WalkSpeed = Config.FollowSpeed
             humanoid:MoveTo(target)
-            -- Faz o clone olhar para o jogador
-            cloneHRP.CFrame = CFrame.new(cloneHRP.Position, Vector3.new(playerHRP.Position.X, cloneHRP.Position.Y, playerHRP.Position.Z))
         end
     end)
 end
@@ -206,15 +138,17 @@ task.spawn(function()
         pcall(function()
             if Following then
                 for _, c in pairs(Clones) do
-                    if c and c.Parent then MoveClone(c) end
+                    if c and c.Parent then
+                        MoveClone(c)
+                    end
                 end
             end
         end)
-        task.wait(0.1)
+        task.wait(0.15)
     end
 end)
 
---[ Deletar ]--
+--[ Deletar último clone ]--
 function DeleteClone()
     if #Clones > 0 then
         local c = table.remove(Clones)
@@ -224,8 +158,11 @@ function DeleteClone()
     end
 end
 
+--[ Deletar todos ]--
 function DeleteAll()
-    for _, c in pairs(Clones) do if c then c:Destroy() end end
+    for _, c in pairs(Clones) do
+        if c then c:Destroy() end
+    end
     Clones = {}
     Following = false
     AddLog("Todos deletados", "sucesso")
@@ -234,7 +171,7 @@ end
 --[ GUI ]--
 local sg = Instance.new("ScreenGui")
 sg.Name = "CloneGUI"
-sg.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+sg.Parent = Player:WaitForChild("PlayerGui")
 
 local mf = Instance.new("Frame")
 mf.Size = UDim2.new(0, 350, 0, 300)
@@ -266,7 +203,10 @@ minBtn.Parent = tl
 local minimized = false
 minBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
-    mf:TweenSize(minimized and UDim2.new(0, 350, 0, 45) or UDim2.new(0, 350, 0, 300), "Out", "Quad", 0.3)
+    mf:TweenSize(
+        minimized and UDim2.new(0, 350, 0, 45) or UDim2.new(0, 350, 0, 300),
+        "Out", "Quad", 0.3
+    )
     minBtn.Text = minimized and "+" or "—"
 end)
 
@@ -353,7 +293,7 @@ info.Parent = ct
 --[ TELA DE LOGS ]--
 local lg = Instance.new("ScreenGui")
 lg.Name = "LogGui"
-lg.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+lg.Parent = Player:WaitForChild("PlayerGui")
 
 gameLogFrame = Instance.new("Frame")
 gameLogFrame.Size = UDim2.new(0, 450, 0, 280)
@@ -382,7 +322,9 @@ clsBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
 clsBtn.TextColor3 = Color3.new(1, 1, 1)
 clsBtn.Font = Enum.Font.GothamBold
 clsBtn.Parent = ltl
-clsBtn.MouseButton1Click:Connect(function() gameLogFrame.Visible = false end)
+clsBtn.MouseButton1Click:Connect(function()
+    gameLogFrame.Visible = false
+end)
 
 local ls = Instance.new("ScrollingFrame")
 ls.Size = UDim2.new(1, -20, 1, -70)
