@@ -1,6 +1,6 @@
 --[[
     DELTA EXECUTOR - CLONE FOLLOWER v7
-    Base: v3 | Fix: spawn longe + pathfinding funcionando
+    VERSÃO CORRIGIDA - Sem dependência de PathfindingService
 ]]
 
 --[ Configurações ]--
@@ -67,7 +67,7 @@ function CreateClone()
 
         AddLog("Spawn: " .. math.floor(spawnPos.X) .. "," .. math.floor(spawnPos.Z), "info")
 
-        -- Clona o personagem inteiro (mantém joints, meshes, roupas)
+        -- Clona o personagem inteiro
         local clone = char:Clone()
         clone.Name = Config.CloneName .. "_" .. (#Clones + 1)
 
@@ -95,7 +95,7 @@ function CreateClone()
 
         clone.Parent = workspace
 
-        -- Teleporta para o spawn com âncora temporária
+        -- Teleporta para o spawn
         local cloneHRP = clone:FindFirstChild("HumanoidRootPart")
         if not cloneHRP then
             AddLog("Clone sem HRP!", "erro")
@@ -112,16 +112,14 @@ function CreateClone()
         Following = true
         AddLog("Clone #" .. #Clones .. " criado!", "sucesso")
 
-        -- Inicia loop de movimento dedicado para este clone
+        -- Inicia loop de movimento dedicado
         StartCloneFollow(clone)
     end)
 end
 
---[ PATHFINDING POR CLONE - loop dedicado por clone ]--
+--[ MOVIMENTO DO CLONE - SEM PATHFINDING ]--
 function StartCloneFollow(clone)
     task.spawn(function()
-        local PathfindingService = game:GetService("PathfindingService")
-
         while clone and clone.Parent and Following do
             pcall(function()
                 local cloneHRP = clone:FindFirstChild("HumanoidRootPart")
@@ -134,79 +132,23 @@ function StartCloneFollow(clone)
 
                 local dist = (playerHRP.Position - cloneHRP.Position).Magnitude
 
-                -- Só move se estiver além da distância mínima
-                if dist <= Config.FollowDistance then return end
-
-                -- Tenta pathfinding
-                local path = PathfindingService:CreatePath({
-                    AgentRadius = 2,
-                    AgentHeight = 5,
-                    AgentCanJump = Config.JumpWhenBlocked,
-                    AgentMaxSlope = 45
-                })
-
-                local ok = pcall(function()
-                    path:ComputeAsync(cloneHRP.Position, playerHRP.Position)
-                end)
-
-                if ok and path.Status == Enum.PathStatus.Success then
-                    local waypoints = path:GetWaypoints()
-
-                    for i, waypoint in ipairs(waypoints) do
-                        -- Sai do loop se o clone foi deletado ou parou de seguir
-                        if not clone.Parent or not Following then break end
-
-                        local curHRP = clone:FindFirstChild("HumanoidRootPart")
-                        local curHumanoid = clone:FindFirstChildOfClass("Humanoid")
-                        local curPlayerHRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-
-                        if not curHRP or not curHumanoid or not curPlayerHRP then break end
-                        if curHumanoid.Health <= 0 then break end
-
-                        -- Se já chegou perto do jogador, para
-                        local curDist = (curPlayerHRP.Position - curHRP.Position).Magnitude
-                        if curDist <= Config.FollowDistance then break end
-
-                        -- Pula se necessário
-                        if waypoint.Action == Enum.PathWaypointAction.Jump then
-                            curHumanoid.Jump = true
-                        end
-
-                        -- Move para o waypoint e aguarda chegar (timeout de 2s)
-                        curHumanoid:MoveTo(waypoint.Position)
-
-                        local arrived = false
-                        local conn
-                        conn = curHumanoid.MoveToFinished:Connect(function()
-                            arrived = true
-                            conn:Disconnect()
-                        end)
-
-                        local elapsed = 0
-                        while not arrived and elapsed < 2 do
-                            task.wait(0.1)
-                            elapsed = elapsed + 0.1
-                            -- Verifica se o clone ainda existe
-                            if not clone.Parent then break end
-                        end
-                        if conn then pcall(function() conn:Disconnect() end) end
-                    end
-                else
-                    -- Fallback: movimento direto sem pathfinding
-                    local curHRP = clone:FindFirstChild("HumanoidRootPart")
-                    local curHumanoid = clone:FindFirstChildOfClass("Humanoid")
-                    local curPlayerHRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-
-                    if curHRP and curHumanoid and curPlayerHRP then
-                        local dir = (curPlayerHRP.Position - curHRP.Position).Unit
-                        local target = curPlayerHRP.Position - (dir * Config.FollowDistance)
-                        curHumanoid:MoveTo(target)
-                        task.wait(1)
-                    end
+                -- Se estiver perto do suficiente, não move
+                if dist <= Config.FollowDistance then
+                    task.wait(0.1)
+                    return
                 end
-            end)
 
-            task.wait(0.2)
+                -- Movimento direto em direção ao jogador
+                local direction = (playerHRP.Position - cloneHRP.Position).Unit
+                local targetPos = playerHRP.Position - (direction * Config.FollowDistance)
+
+                -- Move o clone para o alvo
+                humanoid:MoveTo(targetPos)
+
+                -- Aguarda um pouco antes de recalcular
+                task.wait(0.15)
+
+            end)
         end
     end)
 end
@@ -250,7 +192,7 @@ MainFrame.Parent = ScreenGui
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 15)
 
 local Title = Instance.new("TextLabel")
-Title.Text = "👤 Clone Follower v7"
+Title.Text = "👤 Clone Follower v7 FIXED"
 Title.Size = UDim2.new(1, 0, 0, 40)
 Title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 Title.TextColor3 = Color3.new(1, 1, 1)
@@ -464,6 +406,6 @@ task.spawn(function()
     end
 end)
 
-AddLog("Clone Follower v7 iniciado!", "sucesso")
-AddLog("Pathfinding ativo - spawn longe do jogador", "info")
+AddLog("Clone Follower v7 FIXED iniciado!", "sucesso")
+AddLog("Movimento direto ativo - sem dependência PathFinding", "info")
 AddLog("Clique em + para adicionar clones!", "info")
