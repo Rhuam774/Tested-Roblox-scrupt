@@ -277,9 +277,10 @@ local function criarControlesMobile()
     -- D-PAD
     local dpadFrame = Instance.new("Frame")
     dpadFrame.Name = "DPad"
-    dpadFrame.Size = UDim2.new(0, 205, 0, 205)
-    dpadFrame.Position = UDim2.new(0, 15, 1, -220)
+    dpadFrame.Size = UDim2.new(0, 220, 0, 220)
+    dpadFrame.Position = UDim2.new(0, 20, 1, -240)
     dpadFrame.BackgroundTransparency = 1
+    dpadFrame.ZIndex = 10
     dpadFrame.Parent = controls
 
     local btnCima   = criarSeta("Cima",   "▲", 70, 0,   dpadFrame)
@@ -325,6 +326,7 @@ local function criarControlesMobile()
     jumpLabel.TextSize = 14
     jumpLabel.Font = Enum.Font.GothamBold
     jumpLabel.Parent = jumpBtn
+    jumpBtn.ZIndex = 10
 
     -- ESTADO DAS SETAS
     local pressing = { Cima = false, Baixo = false, Esq = false, Dir = false }
@@ -342,16 +344,23 @@ local function criarControlesMobile()
     local corPress   = Color3.fromRGB(0, 120, 255)
 
     local function conectarSeta(btn, nome)
-        btn.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                pressing[nome] = true
-                btn.BackgroundColor3 = corPress
-                btn.BackgroundTransparency = 0.1
-                atualizarMove()
-            end
+        btn.MouseButton1Down:Connect(function()
+            pressing[nome] = true
+            btn.BackgroundColor3 = corPress
+            btn.BackgroundTransparency = 0.1
+            atualizarMove()
         end)
-        btn.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        
+        -- Garante que o movimento pare mesmo se o dedo sair do botão
+        btn.MouseButton1Up:Connect(function()
+            pressing[nome] = false
+            btn.BackgroundColor3 = corNormal
+            btn.BackgroundTransparency = 0.3
+            atualizarMove()
+        end)
+        
+        btn.MouseLeave:Connect(function()
+            if pressing[nome] then
                 pressing[nome] = false
                 btn.BackgroundColor3 = corNormal
                 btn.BackgroundTransparency = 0.3
@@ -456,13 +465,14 @@ local function ligar()
         local mz = mobileControls.getMoveZ()
         local wantsJump = mobileControls.getJump()
 
-        -- Determina se está se movendo
+        -- Determina se está se movendo (Input ou Velocidade Real)
         local moveDir = Vector3.new(mx, 0, mz)
-        local isMoving = moveDir.Magnitude > 0.1
+        local velocity = hrp.AssemblyLinearVelocity.Magnitude
+        local isMoving = moveDir.Magnitude > 0.1 or velocity > 1
         
         -- Atualiza estado da animação
         animState.isMoving = isMoving
-        animState.moveSpeed = math.min(moveDir.Magnitude, 1)
+        animState.moveSpeed = math.max(math.min(moveDir.Magnitude, 1), math.min(velocity/WALK_SPEED, 1))
         
         -- Anima o personagem apenas quando estiver se movendo
         if isMoving then
@@ -692,6 +702,7 @@ local function criarGUI()
     local gui = Instance.new("ScreenGui")
     gui.Name = "LagatixaGUI"
     gui.ResetOnSpawn = false
+    gui.DisplayOrder = 100
     gui.Parent = player.PlayerGui
 
     local frame = Instance.new("Frame")
