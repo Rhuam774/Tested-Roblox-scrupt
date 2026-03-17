@@ -30,8 +30,7 @@ local animState = {
     isGrounded = true,
     verticalVelocity = 0,
     phase = "idle",
-    tailSegments = {},
-    tailCooldown = false
+    tailSegments = {} -- Guarda as partes do rabo para limpar depois
 }
 
 -- ==============================
@@ -103,7 +102,79 @@ local function encontrarMotors(char)
                     break
                 end
             end
+        elseif part.Name:find("TailSegMotor") then
+            -- Captura os motores do rabo criado procedimentalmente
+            bodyMotors[part.Name] = {
+                motor = part,
+                originalC0 = part.C0,
+                originalC1 = part.C1
+            }
         end
+    end
+end
+
+-- ==============================
+-- GERADOR DE RABO (TRANSFORMA CABELO)
+-- ==============================
+local function criarRabo(char)
+    local corRabo = Color3.fromRGB(50, 70, 50) -- Cor padrão (verde escuro)
+    
+    -- Tenta pegar a cor do cabelo para o rabo
+    for _, acc in ipairs(char:GetChildren()) do
+        if acc:IsA("Accessory") then
+            local handle = acc:FindFirstChild("Handle")
+            if handle and (acc.Name:lower():find("hair") or handle:FindFirstChildOfClass("SpecialMesh")) then
+                -- Se achou o cabelo, pega a cor e esconde o cabelo original
+                corRabo = handle.Color
+                handle.Transparency = 1 
+            end
+        end
+    end
+
+    local parent = char:FindFirstChild("LowerTorso") or char:FindFirstChild("Torso")
+    if not parent then return end
+
+    local lastPart = parent
+    local segments = 5
+    local config = {
+        sizeStart = 0.8,
+        sizeEnd = 0.2,
+        length = 0.6
+    }
+
+    for i = 1, segments do
+        local seg = Instance.new("Part")
+        seg.Name = "LizardTailSeg" .. i
+        seg.Size = Vector3.new(
+            config.sizeStart - (i * (config.sizeStart - config.sizeEnd) / segments),
+            config.sizeStart - (i * (config.sizeStart - config.sizeEnd) / segments),
+            config.length
+        )
+        seg.Color = corRabo
+        seg.Material = Enum.Material.SmoothPlastic
+        seg.CanCollide = false
+        seg.Massless = true
+        seg.Parent = char
+        
+        local mesh = Instance.new("SpecialMesh", seg)
+        mesh.MeshType = Enum.MeshType.Sphere -- Rabo mais arredondado
+        
+        local motor = Instance.new("Motor6D")
+        motor.Name = "TailSegMotor" .. i
+        motor.Part0 = lastPart
+        motor.Part1 = seg
+        
+        -- Posição do Motor
+        if i == 1 then
+            motor.C0 = CFrame.new(0, -0.2, 0.5) * CFrame.Angles(math.rad(-20), 0, 0)
+        else
+            motor.C0 = CFrame.new(0, 0, config.length * 0.8)
+        end
+        motor.C1 = CFrame.new(0, 0, -config.length * 0.2)
+        
+        motor.Parent = lastPart
+        lastPart = seg
+        table.insert(animState.tailSegments, seg)
     end
 end
 
@@ -191,27 +262,15 @@ local function animarPersonagem(dt, isMoving, moveSpeed)
             targetOffset = CFrame.Angles(0, cos * (spineSway * 0.5), 0)
         elseif motorName == "Neck" then
             targetOffset = CFrame.Angles(0, -cos * (spineSway * 1.5), 0)
+        elseif motorName:find("TailSegMotor") then
+            -- ANIMAÇÃO PROCEDURAL DO RABO (Ondulação de onda senoidal)
+            local segIndex = tonumber(motorName:match("%d+"))
+            local wave = math.sin(animationTime - (segIndex * 0.5))
+            local intensity = math.rad(15) + (moveSpeed * math.rad(10))
+            targetOffset = CFrame.Angles(0, wave * intensity, 0)
         end
         
         motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, 0.35)
-    end
-    
-    -- Animação do RABO (Acessórios ou Partes)
-    if #animState.tailSegments > 0 then
-        local waveSpeed = 6
-        local waveAmp = math.rad(25)
-        
-        for i, handle in ipairs(animState.tailSegments) do
-            local motor = handle:FindFirstChild("TailMotor")
-            if motor then
-                local delay = i * 0.3
-                local wave = math.sin(animationTime * 0.7 - delay) * waveAmp
-                
-                -- Se for acessório (Handle), precisamos de um offset de rotação diferente
-                local rotOffset = (handle.Name == "Handle") and CFrame.Angles(math.rad(-90), 0, 0) or CFrame.identity
-                motor.C0 = motor.C0:Lerp(CFrame.new(motor.C0.Position) * rotOffset * CFrame.Angles(0, wave, 0), 0.2)
-            end
-        end
     end
 end
 
@@ -220,127 +279,7 @@ end
 -- ==============================
 local neckRotation = CFrame.identity -- Para suavização
 
--- ==============================
--- SISTEMA DE RABO
--- ==============================
-local function criarRabo(char)
-    -- Limpa rabo anterior
-    for _, seg in ipairs(animState.tailSegments) do if seg then seg:Destroy() end end
-    animState.tailSegments = {}
-
-    local root = char:FindFirstChild("LowerTorso") or char:FindFirstChild("Torso")
-    if not root then return end
-    
-    -- "SEQUESTRO" DE ACESSÓRIOS (Para ser visível para todos no FE)
-    -- Procuramos por cabelos ou qualquer acessório para transformar em rabo
-    local accessoriesFound = 0
-    for _, item in ipairs(char:GetChildren()) do
-        if item:IsA("Accessory") then
-            local handle = item:FindFirstChild("Handle")
-            if handle then
-                -- O Roblox replica mudanças no Motor6D do seu personagem para todos!
-                -- Vamos remover a solda original e colocar o nosso Motor de animação
-                for _, weld in ipairs(handle:GetChildren()) do
-                    if weld:IsA("Weld") or weld:IsA("ManualWeld") or weld:IsA("WeldConstraint") then
-                        weld:Destroy()
-                    end
-                end
-                
-                -- Move para a cintura
-                handle.CFrame = root.CFrame * CFrame.new(0, -0.5, 0.5)
-                
-                local motor = Instance.new("Motor6D")
-                motor.Name = "TailMotor"
-                motor.Part0 = root
-                motor.Part1 = handle
-                motor.C0 = CFrame.new(0, -0.7, 0.6) * CFrame.Angles(math.rad(-90), 0, 0) -- Ajusta para o cabelo apontar pra trás
-                motor.Parent = handle
-                
-                table.insert(animState.tailSegments, handle)
-                accessoriesFound = accessoriesFound + 1
-                
-                -- Pegamos até 2 acessórios para não ficar estranho
-                if accessoriesFound >= 2 then break end
-            end
-        end
-    end
-    
-    if accessoriesFound == 0 then
-        print("⚠️ Nenhum acessório encontrado para o rabo! Usando rabo falso (só você verá).")
-        -- Fallback para rabo falso se o cara for calvo
-        local lastPart = root
-        for i = 1, 3 do
-            local seg = Instance.new("Part")
-            seg.Name = "FakeTail"
-            seg.Size = Vector3.new(0.4, 0.4, 0.8)
-            seg.Color = Color3.fromRGB(50, 150, 50)
-            seg.CanCollide = false
-            seg.Parent = char
-            local m = Instance.new("Motor6D", seg)
-            m.Name = "TailMotor"
-            m.Part0 = lastPart
-            m.Part1 = seg
-            m.C0 = (i==1) and CFrame.new(0, -0.5, 0.5) or CFrame.new(0, 0, 0.6)
-            table.insert(animState.tailSegments, seg)
-            lastPart = seg
-        end
-    end
-end
-
-local function soltarRabo()
-    if #animState.tailSegments == 0 or animState.tailCooldown then return end
-    
-    animState.tailCooldown = true
-    local oldSegments = animState.tailSegments
-    animState.tailSegments = {} 
-    
-    for i, handle in ipairs(oldSegments) do
-        local motor = handle:FindFirstChild("TailMotor")
-        if motor then motor:Destroy() end
-        
-        -- Ativa física para o "rabo" cair (Isso é visível se você tiver Network Ownership)
-        handle.CanCollide = true
-        local force = Instance.new("BodyVelocity", handle)
-        force.Velocity = Vector3.new(math.random(-5,5), 2, math.random(-5,5))
-        force.MaxForce = Vector3.new(4e3, 4e3, 4e3)
-        task.delay(0.2, function() force:Destroy() end)
-        
-        -- Faz o cabelo/rabo vibrar no chão
-        task.spawn(function()
-            local t = 0
-            while t < 4 do
-                if handle and handle.Parent then
-                    handle.RotVelocity = Vector3.new(math.random(-30,30), 20, math.random(-30,30))
-                end
-                t = t + 0.1
-                task.wait(0.1)
-            end
-            -- Para não perder o cabelo pra sempre, vamos dar um jeito de "resetar" o personagem
-            -- mas no soltar rabo real, ele some.
-            if handle.Name == "Handle" then -- É um acessório real
-                handle.Transparency = 1
-                handle.CanCollide = false
-            else -- É rabo falso
-                handle:Destroy()
-            end
-        end)
-    end
-    
-    local originalSpeed = WALK_SPEED
-    WALK_SPEED = 26
-    task.delay(3, function() WALK_SPEED = 16 end)
-    
-    print("🦎 CABELO SOLTADO! Fugindo...")
-    task.delay(8, function()
-        if ativo then
-            criarRabo(player.Character)
-            animState.tailCooldown = false
-            print("🦎 RABO REGENERADO (Cabelo Voltou!)")
-        else
-            animState.tailCooldown = false
-        end
-    end)
-end
+local function atualizarCabeca(char, surfaceNormal)
     local neck = nil
     
     -- No R15, o Neck costuma ser filho do UpperTorso
@@ -573,7 +512,10 @@ local function ligar()
         track:Stop(0)
     end
 
-    -- Encontra os motors para animação manual
+    -- Cria o rabo procedimental antes de encontrar os motors
+    criarRabo(char)
+    
+    -- Encontra os motors para animação manual (inclusive os do rabo agora)
     encontrarMotors(char)
     
     hum.PlatformStand = true
@@ -591,9 +533,6 @@ local function ligar()
     bodyGyro.CFrame = hrp.CFrame
     bodyGyro.Parent = hrp
 
-    -- Cria o rabo visual
-    criarRabo(char)
-    
     mobileControls = criarControlesMobile()
     if not mobileControls then
         warn("Erro ao criar controles mobile!")
@@ -815,26 +754,22 @@ local function desligar()
             end
         end
         
-        -- Limpa a tabela de motors
-        bodyMotors = {}
-
-        -- Reseta acessórios e limpa rabo
-        for _, handle in ipairs(animState.tailSegments) do
-            if handle then
-                if handle.Name == "Handle" then
-                    -- Tenta restaurar o acessório para a cabeça (ou apenas deixa ele lá, o Roblox reseta no spawn)
-                    handle.Transparency = 0
-                    local motor = handle:FindFirstChild("TailMotor")
-                    if motor then motor:Destroy() end
-                    -- Força um reset visual simples
-                    local char = player.Character
-                    if char then char:BreakJoints() task.wait(0.1) player:LoadCharacter() end -- Reset clássico se quiser 100% limpo
-                else
-                    handle:Destroy()
-                end
-            end
+        -- Limpa o rabo
+        for _, obj in ipairs(animState.tailSegments) do
+            if obj then obj:Destroy() end
         end
         animState.tailSegments = {}
+
+        -- Mostra o cabelo de volta
+        for _, acc in ipairs(char:GetChildren()) do
+            if acc:IsA("Accessory") then
+                local handle = acc:FindFirstChild("Handle")
+                if handle then handle.Transparency = 0 end
+            end
+        end
+        
+        -- Limpa a tabela de motors
+        bodyMotors = {}
 
         if hrp then
             for _, obj in ipairs(hrp:GetChildren()) do
@@ -855,9 +790,7 @@ local function desligar()
         moveSpeed = 0,
         isGrounded = true,
         verticalVelocity = 0,
-        phase = "idle",
-        tailSegments = {},
-        tailCooldown = false
+        phase = "idle"
     }
     animationTime = 0
     neckRotation = CFrame.identity
@@ -935,23 +868,6 @@ local function criarGUI()
             status.Text = "OFF"
             status.TextColor3 = Color3.fromRGB(255, 100, 100)
             desligar()
-        end
-    end)
-
-    local btnRabo = Instance.new("TextButton")
-    btnRabo.Size = UDim2.new(0, 100, 0, 30)
-    btnRabo.Position = UDim2.new(1, -110, 0, 50)
-    btnRabo.BackgroundColor3 = Color3.fromRGB(150, 100, 0)
-    btnRabo.Text = "SOLTAR RABO"
-    btnRabo.TextColor3 = Color3.white
-    btnRabo.TextSize = 12
-    btnRabo.Font = Enum.Font.GothamBold
-    btnRabo.Parent = frame
-    Instance.new("UICorner", btnRabo)
-
-    btnRabo.MouseButton1Click:Connect(function()
-        if ativo then
-            soltarRabo()
         end
     end)
 end
