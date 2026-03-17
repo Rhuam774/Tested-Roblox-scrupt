@@ -45,6 +45,10 @@ local function detectar(pos, cf, normal, char)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { char }
+
+    -- local pos = hrp.Position -- Removido: agora recebemos a posicao alvo
+    -- Prioriza a direcao "baixo" local (normal invertida), depois as outras 5
+    -- local cf = hrp.CFrame -- Removido: agora recebemos o CFrame
     local dirs = {
         -normal,           -- principal: direcao atual da gravidade
         -cf.UpVector,
@@ -174,13 +178,13 @@ local function ligar()
         end
 
         -- --------------------------------------------------
-        -- 2. MOVIMENTO E GRAVIDADE
+        -- 2. CALCULA MOVIMENTO E GRAVIDADE (Para onde queremos ir?)
         -- --------------------------------------------------
         myVelN = myVelN - GRAV_ACCEL * dt
         myPos = myPos + myNormal * myVelN * dt + velLateral * dt
 
         -- --------------------------------------------------
-        -- 3. DETECTA SUPERFICIE NA NOVA POSICAO
+        -- 3. DETECTA SUPERFICIE NO DESTINO (O que tem la?)
         -- --------------------------------------------------
         local norm, dist, pt = detectar(myPos, h.CFrame, myNormal, c)
 
@@ -209,7 +213,7 @@ local function ligar()
         end
 
         -- --------------------------------------------------
-        -- 4. APLICA POSICAO E ROTACAO DIRETO NO HRP
+        -- 7. APLICA POSICAO E ROTACAO DIRETO NO HRP
         -- --------------------------------------------------
         local cf = makeCF(myPos, myNormal, camera.CFrame.LookVector)
         h.CFrame = cf
