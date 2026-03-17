@@ -1,5 +1,5 @@
 -- =============================================================
---  MODO LAGATIXA  v10.1  -  ANIMAÇÃO PROCEDURAL
+--  MODO LAGATIXA  v10.2  -  ANIMAÇÃO MANUAL SIMPLES
 -- =============================================================
 
 local Players          = game:GetService("Players")
@@ -67,81 +67,85 @@ local function raycastChao(pos, char)
 end
 
 -- ==============================
--- SISTEMA DE ANIMAÇÃO PROCEDURAL
+-- SISTEMA DE ANIMAÇÃO MANUAL
 -- ==============================
-local function criarAnimacaoProcedural(char)
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    
-    -- Encontra todas as partes do corpo
-    local bodyParts = {}
-    local partNames = {
-        "LeftUpperArm", "LeftLowerArm", "LeftHand",
-        "RightUpperArm", "RightLowerArm", "RightHand",
-        "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
-        "RightUpperLeg", "RightLowerLeg", "RightFoot",
-        "UpperTorso", "LowerTorso"
+local bodyMotors = {} -- Tabela para guardar os Motor6D e suas C0 originais
+local animationTime = 0
+
+local function encontrarMotors(char)
+    bodyMotors = {}
+    local motorNames = {
+        "Left Shoulder", "Right Shoulder", "Left Hip", "Right Hip",
+        "Neck", "Waist" -- Para R6, se for R15, são outros nomes
     }
     
-    for _, name in ipairs(partNames) do
-        local part = char:FindFirstChild(name)
-        if part then
-            bodyParts[name] = {
-                part = part,
-                originalC0 = part:FindFirstChild("Motor6D") and part:FindFirstChild("Motor6D").C0 or CFrame.new(),
-                motor = part:FindFirstChild("Motor6D")
-            }
-        end
-    end
+    -- Para R15
+    local r15Motors = {
+        "LeftShoulder", "RightShoulder", "LeftHip", "RightHip",
+        "Neck", "Waist", "Root", "LeftElbow", "RightElbow", "LeftKnee", "RightKnee"
+    }
     
-    return bodyParts
-end
-
-local function animarMembros(bodyParts, dt, animState)
-    if not bodyParts then return end
-    
-    animState.time = animState.time + dt * animState.moveSpeed
-    
-    -- Para cada membro, aplicar uma animação procedural
-    for partName, data in pairs(bodyParts) do
-        if data.motor then
-            local offset = CFrame.new()
-            local rotOffset = CFrame.Angles(0, 0, 0)
-            
-            -- Lógica de animação baseada no tipo de membro
-            if string.find(partName, "Arm") then
-                -- Braços: balançar como um réptil
-                local swingAmount = math.sin(animState.time * 8) * 0.3
-                if animState.phase == "walk" then
-                    if string.find(partName, "Left") then
-                        rotOffset = CFrame.Angles(swingAmount, 0, swingAmount * 0.5)
-                    else
-                        rotOffset = CFrame.Angles(-swingAmount, 0, -swingAmount * 0.5)
-                    end
-                end
-                
-            elseif string.find(partName, "Leg") then
-                -- Pernas: movimento alternado
-                local stepAmount = math.sin(animState.time * 8) * 0.4
-                if animState.phase == "walk" then
-                    if string.find(partName, "Left") then
-                        rotOffset = CFrame.Angles(stepAmount, 0, 0)
-                    else
-                        rotOffset = CFrame.Angles(-stepAmount, 0, 0)
-                    end
-                end
-                
-            elseif partName == "UpperTorso" then
-                -- Torso: leve rotação
-                local torsoTwist = math.sin(animState.time * 4) * 0.1
-                if animState.phase == "walk" then
-                    rotOffset = CFrame.Angles(0, torsoTwist, 0)
+    -- Tenta encontrar os motors no personagem
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("Motor6D") then
+            local motorName = part.Name
+            -- Verifica se é um motor que queremos animar
+            for _, name in ipairs(r15Motors) do
+                if motorName == name then
+                    bodyMotors[motorName] = {
+                        motor = part,
+                        originalC0 = part.C0,
+                        originalC1 = part.C1
+                    }
+                    break
                 end
             end
+        end
+    end
+end
+
+local function animarPersonagem(dt, isMoving, moveSpeed)
+    if not isMoving then
+        -- Se não está movendo, resetar para posição idle (levemente diferente da original para parecer natural)
+        for motorName, data in pairs(bodyMotors) do
+            local motor = data.motor
+            local originalC0 = data.originalC0
             
-            -- Aplicar animação
-            local finalC0 = data.originalC0 * rotOffset
-            data.motor.C0 = finalC0
+            -- Adiciona uma leve inclinação para a posição idle
+            local idleOffset = CFrame.Angles(0, 0, 0)
+            if motorName == "LeftShoulder" or motorName == "RightShoulder" then
+                idleOffset = CFrame.Angles(math.rad(5), 0, 0)
+            elseif motorName == "LeftHip" or motorName == "RightHip" then
+                idleOffset = CFrame.Angles(math.rad(-5), 0, 0)
+            end
+            
+            motor.C0 = originalC0 * idleOffset
+        end
+        return
+    end
+    
+    -- Animação de andar
+    animationTime = animationTime + dt * moveSpeed * 5 -- Ajuste a velocidade da animação aqui
+    
+    for motorName, data in pairs(bodyMotors) do
+        local motor = data.motor
+        local originalC0 = data.originalC0
+        
+        -- Ângulos de animação (em radianos)
+        local angle = math.sin(animationTime) * math.rad(20) -- Amplitude de 20 graus
+        
+        if motorName == "LeftShoulder" then
+            motor.C0 = originalC0 * CFrame.Angles(angle, 0, 0)
+        elseif motorName == "RightShoulder" then
+            motor.C0 = originalC0 * CFrame.Angles(-angle, 0, 0)
+        elseif motorName == "LeftHip" then
+            motor.C0 = originalC0 * CFrame.Angles(-angle, 0, 0)
+        elseif motorName == "RightHip" then
+            motor.C0 = originalC0 * CFrame.Angles(angle, 0, 0)
+        elseif motorName == "Neck" then
+            -- Cabeça se move levemente para os lados
+            local neckAngle = math.sin(animationTime * 0.5) * math.rad(5)
+            motor.C0 = originalC0 * CFrame.Angles(0, neckAngle, 0)
         end
     end
 end
@@ -204,7 +208,7 @@ local function atualizarCabeca(char, surfaceNormal)
     yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
     
     -- Aplica no C0 do Neck (preservando a posição original)
-    local originalC0 = CFrame.new(0, 1, 0)
+    local originalC0 = neck.C0 -- Usamos a C0 atual, que pode ter sido modificada pela animação
     
     local rotacao = CFrame.Angles(0, yaw, 0) -- Sem pitch para evitar inclinações verticais
     neck.C0 = originalC0 * rotacao
@@ -391,8 +395,8 @@ local function ligar()
         track:Stop(0)
     end
 
-    -- Cria sistema de animação procedural
-    local bodyParts = criarAnimacaoProcedural(char)
+    -- Encontra os motors para animação manual
+    encontrarMotors(char)
     
     hum.PlatformStand = true
     hrp.Anchored = false
@@ -423,9 +427,6 @@ local function ligar()
     local jumpingFromSurface = false
     local jumpSurfaceNormal = Vector3.new(0, 1, 0)
 
-    -- Estado da animação
-    local lastMoveTime = tick()
-
     loop = RunService.Heartbeat:Connect(function(dt)
         if not ativo then return end
         if not char or not char.Parent then return end
@@ -435,29 +436,20 @@ local function ligar()
         local mz = mobileControls.getMoveZ()
         local wantsJump = mobileControls.getJump()
 
-        -- Atualiza estado da animação
+        -- Determina se está se movendo
         local moveDir = Vector3.new(mx, 0, mz)
         local isMoving = moveDir.Magnitude > 0.1
         
+        -- Atualiza estado da animação
+        animState.isMoving = isMoving
+        animState.moveSpeed = math.min(moveDir.Magnitude, 1)
+        
+        -- Anima o personagem apenas quando estiver se movendo
         if isMoving then
-            animState.isMoving = true
-            animState.moveSpeed = math.min(moveDir.Magnitude, 1)
-            animState.phase = "walk"
-            lastMoveTime = tick()
-        elseif tick() - lastMoveTime < 0.5 then
-            -- Continua animação por um breve período após parar
-            animState.moveSpeed = math.max(0, animState.moveSpeed - dt * 2)
+            animarPersonagem(dt, isMoving, animState.moveSpeed)
         else
-            animState.isMoving = false
-            animState.moveSpeed = 0
-            animState.phase = "idle"
+            animarPersonagem(dt, false, 0)
         end
-        
-        animState.isGrounded = isGrounded
-        animState.verticalVelocity = verticalVelocity
-        
-        -- Anima os membros proceduralmente
-        animarMembros(bodyParts, dt, animState)
 
         -- DIREÇÕES DA CÂMERA
         local camCF = camera.CFrame
@@ -575,12 +567,11 @@ local function ligar()
         end
 
         -- ============================
-        -- ORIENTAÇÃO DO CORPO (VERSÃO ESTABILIZADA)
+        -- ORIENTAÇÃO DO CORPO
         -- ============================
         local upVec = surfaceNormal
         local lookVec = currentForward
 
-        -- Remove a componente do look vector na direção da normal da superfície
         lookVec = (lookVec - lookVec:Dot(upVec) * upVec)
         if lookVec.Magnitude > 0.01 then
             lookVec = lookVec.Unit
@@ -595,25 +586,6 @@ local function ligar()
             rightVec = Vector3.new(1, 0, 0)
         end
         lookVec = upVec:Cross(rightVec).Unit
-
-        -- Para paredes, mantém o personagem mais "em pé" em relação ao mundo
-        -- Isso evita que ele fique totalmente de lado em superfícies verticais
-        if upVec:Dot(Vector3.new(0, 1, 0)) < 0.5 then
-            -- Estamos em uma superfície inclinada/vertical
-            -- Mistura a up vector com a vertical do mundo para uma orientação mais natural
-            local blendedUp = upVec:Lerp(Vector3.new(0, 1, 0), 0.3)
-            if blendedUp.Magnitude > 0.01 then
-                blendedUp = blendedUp.Unit
-                rightVec = lookVec:Cross(blendedUp)
-                if rightVec.Magnitude > 0.01 then
-                    rightVec = rightVec.Unit
-                else
-                    rightVec = Vector3.new(1, 0, 0)
-                end
-                lookVec = blendedUp:Cross(rightVec).Unit
-                upVec = blendedUp
-            end
-        end
 
         local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
         bodyGyro.CFrame = targetCF
@@ -654,31 +626,16 @@ local function desligar()
             animate.Disabled = false
         end
 
-        -- Reseta o Neck
-        local function resetNeck(parent)
-            if not parent then return end
-            for _, obj in ipairs(parent:GetChildren()) do
-                if obj:IsA("Motor6D") and obj.Name == "Neck" then
-                    local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
-                    if isR6 then
-                        obj.C0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
-                    else
-                        obj.C0 = CFrame.new(0, 1, 0)
-                    end
-                end
+        -- Reseta os motors para posição original
+        for motorName, data in pairs(bodyMotors) do
+            if data.motor then
+                data.motor.C0 = data.originalC0
+                data.motor.C1 = data.originalC1
             end
         end
-
-        resetNeck(char:FindFirstChild("Head"))
-        resetNeck(char:FindFirstChild("UpperTorso"))
-        resetNeck(char:FindFirstChild("Torso"))
-
-        -- Reseta todos os Motor6D para posição original
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("Motor6D") then
-                part.C0 = part.C0 -- Mantém a posição atual, que foi alterada pela animação procedural
-            end
-        end
+        
+        -- Limpa a tabela de motors
+        bodyMotors = {}
 
         if hrp then
             for _, obj in ipairs(hrp:GetChildren()) do
@@ -701,6 +658,7 @@ local function desligar()
         verticalVelocity = 0,
         phase = "idle"
     }
+    animationTime = 0
 end
 
 -- ==============================
@@ -729,7 +687,7 @@ local function criarGUI()
     title.Size = UDim2.new(1, 0, 0, 40)
     title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
     title.BorderSizePixel = 0
-    title.Text = "🦎 LAGATIXA v10.1"
+    title.Text = "🦎 LAGATIXA v10.2"
     title.TextColor3 = Color3.fromRGB(0, 200, 255)
     title.TextSize = 18
     title.Font = Enum.Font.GothamBold
@@ -792,4 +750,4 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
-print("[LAGATIXA v10.1] Pronto! Animação procedural ativa")
+print("[LAGATIXA v10.2] Pronto! Animação manual ativada por movimento")
