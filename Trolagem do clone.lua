@@ -198,70 +198,58 @@ end
 -- ==============================
 -- CABEÇA OLHA PRA CÂMERA (Versão Melhorada)
 -- ==============================
+local neckRotation = CFrame.identity -- Para suavização
+
 local function atualizarCabeca(char, surfaceNormal)
     local neck = nil
-    local head = char:FindFirstChild("Head")
     
-    if head then
-        for _, obj in ipairs(head:GetChildren()) do
-            if obj:IsA("Motor6D") and obj.Name == "Neck" then
-                neck = obj
-                break
-            end
-        end
+    -- No R15, o Neck costuma ser filho do UpperTorso
+    local upperTorso = char:FindFirstChild("UpperTorso")
+    if upperTorso then
+        neck = upperTorso:FindFirstChild("Neck")
     end
     
+    -- Se não achou, tenta no Head (comum no R6)
     if not neck then
-        local upperTorso = char:FindFirstChild("UpperTorso")
-        if upperTorso then
-            for _, obj in ipairs(upperTorso:GetChildren()) do
-                if obj:IsA("Motor6D") and obj.Name == "Neck" then
-                    neck = obj
-                    break
-                end
-            end
+        local head = char:FindFirstChild("Head")
+        if head then
+            neck = head:FindFirstChild("Neck")
         end
     end
     
-    if not neck then return end
+    if not neck or not neck:IsA("Motor6D") then return end
     
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    
-    -- Direção da câmera relativa ao corpo, considerando a normal da superfície
-    local camLook = camera.CFrame.LookVector
-    
-    -- Projeta o look vector no plano da superfície para evitar rotações verticais indesejadas
-    local projectedLook = camLook - camLook:Dot(surfaceNormal) * surfaceNormal
-    if projectedLook.Magnitude > 0.01 then
-        projectedLook = projectedLook.Unit
-    else
-        projectedLook = Vector3.new(0, 0, -1)
-    end
-    
-    -- Converte para espaço local do torso
     local torsoParent = neck.Part0
     if not torsoParent then return end
     
-    local torsoCF = torsoParent.CFrame
-    local localLook = torsoCF:VectorToObjectSpace(projectedLook)
+    -- 1. Pega a direção da câmera no mundo
+    local camLook = camera.CFrame.LookVector
     
-    -- Calcula ângulos (Yaw e Pitch)
+    -- 2. Converte essa direção para o espaço local do TORSO
+    local localLook = torsoParent.CFrame:VectorToObjectSpace(camLook)
+    
+    -- 3. Calcula os ângulos
+    -- No Roblox, a frente padrão do torso é -Z
+    -- Queremos girar o pescoço para que a cabeça aponte para localLook
     local yaw = math.atan2(-localLook.X, -localLook.Z)
-    local pitch = math.asin(localLook.Y)
+    local pitch = math.asin(math.clamp(localLook.Y, -0.9, 0.9))
     
-    -- Limita os ângulos para não quebrar o pescoço
-    yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
-    pitch = math.clamp(pitch, -math.rad(45), math.rad(45))
+    -- Limites (Lagatixas têm pescoços flexíveis, mas não 360)
+    yaw = math.clamp(yaw, -math.rad(80), math.rad(80))
+    pitch = math.clamp(pitch, -math.rad(60), math.rad(60))
     
-    -- Aplica no C0 do Neck (preservando a rotação da animação se houver)
-    local baseC0 = originalC0
+    -- 4. Suavização (Lerp) para não ser instantâneo e tremer
+    local targetRot = CFrame.Angles(pitch, yaw, 0)
+    neckRotation = neckRotation:Lerp(targetRot, 0.2)
+    
+    -- 5. Aplica sobre a C0 ORIGINAL que salvamos no ligar()
+    -- Se não estiver no bodyMotors (algo deu errado), usa a C0 atual (risco de drift)
+    local baseC0 = neck.C0
     if bodyMotors["Neck"] then
-        baseC0 = bodyMotors["Neck"].motor.C0
+        baseC0 = bodyMotors["Neck"].originalC0
     end
     
-    local rotacao = CFrame.Angles(pitch, yaw, 0)
-    neck.C0 = baseC0 * rotacao
+    neck.C0 = baseC0 * neckRotation
 end
 
 -- ==============================
@@ -709,6 +697,7 @@ local function desligar()
         phase = "idle"
     }
     animationTime = 0
+    neckRotation = CFrame.identity
 end
 
 -- ==============================
