@@ -298,6 +298,9 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
-criarUI()
+task.spawn(function()
+    while not player:FindFirstChild("PlayerGui") do task.wait() end
+    criarUI()
+end)
+
 print("[Lagatixa v7] Sistema de movimento robusto carregado.")
-!")
