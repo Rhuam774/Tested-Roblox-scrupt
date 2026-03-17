@@ -1,10 +1,10 @@
 -- =============================================================
---  MODO LAGATIXA  v8  -  VERSÃO MOBILE/CELULAR
+--  MODO LAGATIXA  v11  -  GRAVIDADE LOCAL + PULO NA PAREDE
 -- =============================================================
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local TweenService     = game:GetService("TweenService")
+local Players      = game:GetService("Players")
+local RunService   = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -12,175 +12,282 @@ local camera = workspace.CurrentCamera
 -- ==============================
 -- CONSTANTES
 -- ==============================
-local WALK_SPEED   = 16
-local JUMP_POWER   = 50
-local GRAVITY      = 196.2
-local STICK_DIST   = 3
+local WALK_SPEED   = 16          -- velocidade de caminhada
+local JUMP_POWER   = 55          -- intensidade do pulo
+local GRAVITY      = 120         -- força da gravidade local
+local STICK_DIST   = 3           -- distância "ideal" da superfície
+local MAX_SURF_DIST= 10          -- distância máxima para considerar uma superfície
+
+local ANIM_WALK = "rbxassetid://180426354"
 
 -- ==============================
 -- ESTADO
 -- ==============================
-local ativo = false
-local loop = nil
+local ativo          = false
+local loop           = nil
 local mobileControls = nil
+local animTrack      = nil
 
 -- ==============================
--- RAYCAST SIMPLES
+-- CONTROLES NATIVOS
 -- ==============================
-local function raycastChao(pos, char)
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {char}
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    
-    local dirs = {
-        Vector3.new(0, -1, 0),
-        Vector3.new(0, 1, 0),
-        Vector3.new(1, 0, 0),
-        Vector3.new(-1, 0, 0),
-        Vector3.new(0, 0, 1),
-        Vector3.new(0, 0, -1),
-    }
-    
-    local melhorHit = nil
-    local melhorDist = math.huge
-    
-    for _, dir in ipairs(dirs) do
-        local result = workspace:Raycast(pos, dir * 10, params)
-        if result then
-            local dist = (result.Position - pos).Magnitude
-            if dist < melhorDist then
-                melhorDist = dist
-                melhorHit = result
-            end
+local function disableDefaultControls()
+    local playerGui = player:WaitForChild("PlayerGui")
+    pcall(function()
+        local touchGui = playerGui:FindFirstChild("TouchGui")
+        if touchGui then
+            touchGui.Enabled = false
         end
-    end
-    
-    return melhorHit, melhorDist
+    end)
+    pcall(function()
+        local playerModule = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"))
+        local controls = playerModule:GetControls()
+        controls:Disable()
+    end)
+end
+
+local function enableDefaultControls()
+    pcall(function()
+        local playerGui = player:WaitForChild("PlayerGui")
+        local touchGui = playerGui:FindFirstChild("TouchGui")
+        if touchGui then
+            touchGui.Enabled = true
+        end
+    end)
+    pcall(function()
+        local playerModule = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"))
+        local controls = playerModule:GetControls()
+        controls:Enable()
+    end)
 end
 
 -- ==============================
--- CONTROLES MOBILE
+-- RAYCAST SUPERFÍCIE MAIS PRÓXIMA
+-- ==============================
+local function raycastSuperficie(pos, char)
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {char}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+
+    local dirs = {
+        Vector3.new( 0,-1, 0),
+        Vector3.new( 0, 1, 0),
+        Vector3.new( 1, 0, 0),
+        Vector3.new(-1, 0, 0),
+        Vector3.new( 0, 0, 1),
+        Vector3.new( 0, 0,-1),
+    }
+
+    local bestHit, bestDist = nil, math.huge
+
+    for _, dir in ipairs(dirs) do
+        local result = workspace:Raycast(pos, dir * MAX_SURF_DIST, params)
+        if result then
+            local dist = (result.Position - pos).Magnitude
+            if dist < bestDist then
+                bestDist = dist
+                bestHit  = result
+            end
+        end
+    end
+
+    return bestHit, bestDist
+end
+
+-- ==============================
+-- D-PAD MOBILE (SETAS + PULO)
 -- ==============================
 local function criarControlesMobile()
     local gui = player.PlayerGui:FindFirstChild("LagatixaGUI")
     if not gui then return end
-    
-    -- Container dos controles
+
     local controls = Instance.new("Frame")
     controls.Name = "MobileControls"
     controls.Size = UDim2.new(1, 0, 1, 0)
     controls.BackgroundTransparency = 1
     controls.Parent = gui
-    
-    -- JOYSTICK ESQUERDO (Movimento)
-    local joyBack = Instance.new("Frame")
-    joyBack.Name = "JoyBack"
-    joyBack.Size = UDim2.new(0, 120, 0, 120)
-    joyBack.Position = UDim2.new(0, 30, 1, -150)
-    joyBack.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    joyBack.BackgroundTransparency = 0.6
-    joyBack.BorderSizePixel = 0
-    joyBack.Parent = controls
-    
-    local joyCorner = Instance.new("UICorner", joyBack)
-    joyCorner.CornerRadius = UDim.new(1, 0)
-    
-    local joyStick = Instance.new("Frame")
-    joyStick.Name = "Stick"
-    joyStick.Size = UDim2.new(0, 50, 0, 50)
-    joyStick.Position = UDim2.new(0.5, -25, 0.5, -25)
-    joyStick.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    joyStick.BackgroundTransparency = 0.4
-    joyStick.BorderSizePixel = 0
-    joyStick.Parent = joyBack
-    
-    local stickCorner = Instance.new("UICorner", joyStick)
-    stickCorner.CornerRadius = UDim.new(1, 0)
-    
-    -- BOTÃO DE PULO (Direita)
-    local jumpBtn = Instance.new("TextButton")
-    jumpBtn.Name = "JumpBtn"
-    jumpBtn.Size = UDim2.new(0, 80, 0, 80)
-    jumpBtn.Position = UDim2.new(1, -110, 1, -150)
-    jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-    jumpBtn.BackgroundTransparency = 0.3
-    jumpBtn.BorderSizePixel = 0
-    jumpBtn.Text = "⬆"
-    jumpBtn.TextSize = 40
-    jumpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    jumpBtn.Font = Enum.Font.GothamBold
-    jumpBtn.Parent = controls
-    
-    local jumpCorner = Instance.new("UICorner", jumpBtn)
-    jumpCorner.CornerRadius = UDim.new(1, 0)
-    
-    -- Estado do joystick
-    local moveX = 0
-    local moveZ = 0
-    local touching = false
-    local wantsJump = false
-    
-    -- Função do Joystick
-    local function updateJoystick(input)
-        local center = joyBack.AbsolutePosition + joyBack.AbsoluteSize / 2
-        local delta = Vector2.new(input.Position.X, input.Position.Y) - center
-        local distance = math.min(delta.Magnitude, 60)
-        local angle = math.atan2(delta.Y, delta.X)
-        
-        if distance > 10 then
-            moveX = math.cos(angle) * (distance / 60)
-            moveZ = -math.sin(angle) * (distance / 60)
-            
-            local offset = Vector2.new(math.cos(angle), math.sin(angle)) * distance
-            joyStick.Position = UDim2.new(0.5, offset.X - 25, 0.5, offset.Y - 25)
-        else
-            moveX = 0
-            moveZ = 0
-            joyStick.Position = UDim2.new(0.5, -25, 0.5, -25)
+
+    local pressedUp, pressedDown = false, false
+    local pressedLeft, pressedRight = false, false
+    local pressedJump = false
+
+    local function criarBotaoSeta(nome, texto, posX, posY, tamanho)
+        local btn = Instance.new("TextButton")
+        btn.Name = nome
+        btn.Size = UDim2.new(0, tamanho, 0, tamanho)
+        btn.Position = UDim2.new(0, posX, 1, posY)
+        btn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+        btn.BackgroundTransparency = 0.3
+        btn.BorderSizePixel = 0
+        btn.Text = texto
+        btn.TextSize = 28
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.Font = Enum.Font.GothamBold
+        btn.AutoButtonColor = false
+        btn.Parent = controls
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
+        local stroke = Instance.new("UIStroke", btn)
+        stroke.Color = Color3.fromRGB(100, 150, 255)
+        stroke.Thickness = 2
+        stroke.Transparency = 0.5
+        return btn
+    end
+
+    local tam = 60
+    local esp = 5
+    local baseX = 30
+    local baseY = -200
+
+    local btnUp    = criarBotaoSeta("Up",    "▲", baseX + tam + esp,       baseY - tam*2 - esp, tam)
+    local btnDown  = criarBotaoSeta("Down",  "▼", baseX + tam + esp,       baseY,               tam)
+    local btnLeft  = criarBotaoSeta("Left",  "◀", baseX,                   baseY - tam - esp,   tam)
+    local btnRight = criarBotaoSeta("Right", "▶", baseX + tam*2 + esp*2,   baseY - tam - esp,   tam)
+
+    local center = Instance.new("Frame")
+    center.Size = UDim2.new(0, tam-10, 0, tam-10)
+    center.Position = UDim2.new(0, baseX + tam + esp + 5, 1, baseY - tam - esp + 5)
+    center.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
+    center.BackgroundTransparency = 0.5
+    center.BorderSizePixel = 0
+    center.Parent = controls
+    Instance.new("UICorner", center).CornerRadius = UDim.new(0, 10)
+
+    local btnJump = Instance.new("TextButton")
+    btnJump.Name = "Jump"
+    btnJump.Size = UDim2.new(0, 90, 0, 90)
+    btnJump.Position = UDim2.new(1, -120, 1, -180)
+    btnJump.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
+    btnJump.BackgroundTransparency = 0.2
+    btnJump.BorderSizePixel = 0
+    btnJump.Text = "PULO"
+    btnJump.TextSize = 18
+    btnJump.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnJump.Font = Enum.Font.GothamBold
+    btnJump.AutoButtonColor = false
+    btnJump.Parent = controls
+    Instance.new("UICorner", btnJump).CornerRadius = UDim.new(1, 0)
+    local jumpStroke = Instance.new("UIStroke", btnJump)
+    jumpStroke.Color = Color3.fromRGB(100, 255, 150)
+    jumpStroke.Thickness = 3
+
+    local function highlight(btn, on)
+        local goal = on and {
+            BackgroundColor3 = Color3.fromRGB(100,150,255),
+            BackgroundTransparency = 0.1
+        } or {
+            BackgroundColor3 = Color3.fromRGB(50,50,70),
+            BackgroundTransparency = 0.3
+        }
+        TweenService:Create(btn, TweenInfo.new(0.08), goal):Play()
+    end
+    local function highlightJump(on)
+        local goal = on and {
+            BackgroundColor3 = Color3.fromRGB(50,255,150),
+            BackgroundTransparency = 0
+        } or {
+            BackgroundColor3 = Color3.fromRGB(0,180,100),
+            BackgroundTransparency = 0.2
+        }
+        TweenService:Create(btnJump, TweenInfo.new(0.08), goal):Play()
+    end
+
+    local function bindDir(btn, flag)
+        btn.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if flag == "Up"    then pressedUp    = true end
+                if flag == "Down"  then pressedDown  = true end
+                if flag == "Left"  then pressedLeft  = true end
+                if flag == "Right" then pressedRight = true end
+                highlight(btn, true)
+            end
+        end)
+        btn.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if flag == "Up"    then pressedUp    = false end
+                if flag == "Down"  then pressedDown  = false end
+                if flag == "Left"  then pressedLeft  = false end
+                if flag == "Right" then pressedRight = false end
+                highlight(btn, false)
+            end
+        end)
+    end
+
+    bindDir(btnUp, "Up")
+    bindDir(btnDown, "Down")
+    bindDir(btnLeft, "Left")
+    bindDir(btnRight, "Right")
+
+    btnJump.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            pressedJump = true
+            highlightJump(true)
+        end
+    end)
+    btnJump.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            pressedJump = false
+            highlightJump(false)
+        end
+    end)
+
+    return {
+        getMoveX = function()
+            local x = 0
+            if pressedLeft  then x -= 1 end
+            if pressedRight then x += 1 end
+            return x
+        end,
+        getMoveZ = function()
+            local z = 0
+            if pressedUp   then z += 1 end
+            if pressedDown then z -= 1 end
+            return z
+        end,
+        getJump = function()
+            return pressedJump
+        end,
+        destroy = function()
+            controls:Destroy()
+        end
+    }
+end
+
+-- ==============================
+-- ANIMAÇÃO
+-- ==============================
+local function setupAnimacao(hum)
+    if animTrack then
+        animTrack:Stop()
+        animTrack = nil
+    end
+    local ok, track = pcall(function()
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+        local anim = Instance.new("Animation")
+        anim.AnimationId = ANIM_WALK
+        return animator:LoadAnimation(anim)
+    end)
+    if ok and track then
+        animTrack = track
+        animTrack.Looped = true
+        animTrack.Priority = Enum.AnimationPriority.Movement
+    end
+end
+
+local function atualizarAnimacao(andando)
+    if not animTrack then return end
+    if andando then
+        if not animTrack.IsPlaying then
+            animTrack:Play(0.1)
+        end
+    else
+        if animTrack.IsPlaying then
+            animTrack:Stop(0.1)
         end
     end
-    
-    -- Eventos do Joystick
-    joyBack.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            touching = true
-            updateJoystick(input)
-        end
-    end)
-    
-    joyBack.InputChanged:Connect(function(input)
-        if touching and input.UserInputType == Enum.UserInputType.Touch then
-            updateJoystick(input)
-        end
-    end)
-    
-    joyBack.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            touching = false
-            moveX = 0
-            moveZ = 0
-            joyStick.Position = UDim2.new(0.5, -25, 0.5, -25)
-        end
-    end)
-    
-    -- Eventos do Botão de Pulo
-    jumpBtn.MouseButton1Down:Connect(function()
-        wantsJump = true
-        jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-    end)
-    
-    jumpBtn.MouseButton1Up:Connect(function()
-        wantsJump = false
-        jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-    end)
-    
-    -- Retorna funções para ler o input
-    return {
-        getMoveX = function() return moveX end,
-        getMoveZ = function() return moveZ end,
-        getJump = function() return wantsJump end,
-        destroy = function() controls:Destroy() end
-    }
 end
 
 -- ==============================
@@ -189,127 +296,145 @@ end
 local function ligar()
     local char = player.Character
     if not char then return end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    
+    local hrp  = char:FindFirstChild("HumanoidRootPart")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
-    
-    -- Desativa controles normais
+
+    disableDefaultControls()
+
     hum.PlatformStand = true
     hrp.Anchored = false
-    
-    -- Cria BodyVelocity
+
     local bodyVel = Instance.new("BodyVelocity")
-    bodyVel.MaxForce = Vector3.new(4e4, 4e4, 4e4)
+    bodyVel.Name = "LagatixaVel"
+    bodyVel.MaxForce = Vector3.new(5e4, 5e4, 5e4)
     bodyVel.Velocity = Vector3.zero
     bodyVel.Parent = hrp
-    
-    -- Cria BodyGyro
+
     local bodyGyro = Instance.new("BodyGyro")
-    bodyGyro.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
-    bodyGyro.P = 3000
-    bodyGyro.D = 500
+    bodyGyro.Name = "LagatixaGyro"
+    bodyGyro.MaxTorque = Vector3.new(5e4, 5e4, 5e4)
+    bodyGyro.P = 4000
+    bodyGyro.D = 600
     bodyGyro.CFrame = hrp.CFrame
     bodyGyro.Parent = hrp
-    
-    -- Cria controles mobile
+
+    setupAnimacao(hum)
+
     mobileControls = criarControlesMobile()
-    if not mobileControls then
-        warn("Erro ao criar controles mobile!")
-        return
-    end
-    
-    -- Estado
-    local surfaceNormal = Vector3.new(0, 1, 0)
-    local verticalVelocity = 0
-    local isGrounded = false
-    local canJump = true
-    
+    if not mobileControls then return end
+
+    -- ESTADO FÍSICO LOCAL
+    local surfNormal   = Vector3.new(0,1,0)   -- "cima" local (normal da superfície)
+    local surfVel      = 0                    -- velocidade ao longo da normal (positivo: indo pra dentro da superfície)
+    local onSurface    = false
+    local canJump      = true
+
     loop = RunService.Heartbeat:Connect(function(dt)
         if not ativo then return end
         if not char or not char.Parent then return end
         if not hrp or not hrp.Parent then return end
-        
-        -- LÊ INPUT DOS CONTROLES MOBILE
+
+        local velObj  = hrp:FindFirstChild("LagatixaVel")
+        local gyroObj = hrp:FindFirstChild("LagatixaGyro")
+        if not velObj or not gyroObj then return end
+
         local moveX = mobileControls.getMoveX()
         local moveZ = mobileControls.getMoveZ()
         local wantsJump = mobileControls.getJump()
-        
-        -- DIREÇÕES DA CÂMERA
-        local camCF = camera.CFrame
-        local camLook = camCF.LookVector
+
+        -- DIREÇÕES PROJETADAS NA SUPERFÍCIE
+        local camCF    = camera.CFrame
+        local camLook  = camCF.LookVector
         local camRight = camCF.RightVector
-        
-        -- Projeta na superfície
-        local forward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
-        if forward.Magnitude > 0.01 then
+
+        local forward = camLook - camLook:Dot(surfNormal) * surfNormal
+        if forward.Magnitude < 0.01 then
+            forward = Vector3.new(0,0,-1)
+        else
             forward = forward.Unit
-        else
-            forward = Vector3.new(0, 0, -1)
         end
-        
-        local right = (camRight - camRight:Dot(surfaceNormal) * surfaceNormal)
-        if right.Magnitude > 0.01 then
+
+        local right = camRight - camRight:Dot(surfNormal) * surfNormal
+        if right.Magnitude < 0.01 then
+            right = Vector3.new(1,0,0)
+        else
             right = right.Unit
-        else
-            right = Vector3.new(1, 0, 0)
         end
-        
-        -- MOVIMENTO LATERAL
+
         local moveDir = forward * moveZ + right * moveX
         local lateralVel = Vector3.zero
-        
+        local andando = false
         if moveDir.Magnitude > 0.1 then
             lateralVel = moveDir.Unit * WALK_SPEED
+            andando = true
         end
-        
-        -- DETECÇÃO DE SUPERFÍCIE
-        local hit, dist = raycastChao(hrp.Position, char)
-        
-        if hit and dist < 5 then
-            surfaceNormal = surfaceNormal:Lerp(hit.Normal, dt * 10)
-            if surfaceNormal.Magnitude > 0 then
-                surfaceNormal = surfaceNormal.Unit
+        atualizarAnimacao(andando)
+
+        -- DETECTA SUPERFÍCIE MAIS PRÓXIMA
+        local hit, dist = raycastSuperficie(hrp.Position, char)
+        if hit and dist <= MAX_SURF_DIST then
+            -- Normal da superfície: "cima" local
+            surfNormal = surfNormal:Lerp(hit.Normal, dt * 12)
+            if surfNormal.Magnitude < 0.001 then
+                surfNormal = Vector3.new(0,1,0)
             else
-                surfaceNormal = Vector3.new(0, 1, 0)
+                surfNormal = surfNormal.Unit
             end
-            
-            if dist < STICK_DIST and verticalVelocity <= 0 then
-                isGrounded = true
-                verticalVelocity = 0
-                local stickForce = (hit.Position + hit.Normal * STICK_DIST - hrp.Position) * 10
-                bodyVel.Velocity = lateralVel + stickForce
+
+            -- Gravidade sempre puxa PARA a superfície
+            -- => velocidade ao longo da normal aumenta NO SENTIDO DA NORMAL
+            surfVel = surfVel + GRAVITY * dt   -- positivo: indo "pra dentro" da superfície
+
+            -- Ver se está "encostado" na superfície
+            if dist < STICK_DIST and surfVel > 0 then
+                onSurface = true
+                surfVel = 0
+
+                -- Corrige posição para ficar a STICK_DIST da superfície
+                local alvoPos = hit.Position + hit.Normal * STICK_DIST
+                local corr = (alvoPos - hrp.Position) * 10
+                velObj.Velocity = lateralVel + corr
             else
-                isGrounded = false
-                verticalVelocity = verticalVelocity - GRAVITY * dt
-                bodyVel.Velocity = lateralVel + surfaceNormal * verticalVelocity
+                onSurface = false
+                -- Movimento no eixo da normal
+                velObj.Velocity = lateralVel + surfNormal * surfVel
             end
         else
-            isGrounded = false
-            verticalVelocity = verticalVelocity - GRAVITY * dt
-            bodyVel.Velocity = lateralVel + Vector3.new(0, verticalVelocity, 0)
-            surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), dt * 5)
+            -- Sem superfície próxima: gravidade tradicional pra baixo
+            onSurface = false
+            surfNormal = surfNormal:Lerp(Vector3.new(0,1,0), dt * 3)
+            surfVel = surfVel + GRAVITY * dt
+            velObj.Velocity = lateralVel + Vector3.new(0, -surfVel, 0)
         end
-        
-        -- PULO
-        if wantsJump and isGrounded and canJump then
-            verticalVelocity = JUMP_POWER
-            isGrounded = false
+
+        -- PULO LOCAL:
+        -- Se está encostado em uma superfície, pulo = impulso CONTRA a normal (pra fora da parede/teto)
+        if wantsJump and onSurface and canJump then
+            surfVel = -JUMP_POWER     -- negativo => vai na direção oposta da superfície
+            onSurface = false
             canJump = false
-            task.delay(0.5, function()
+            task.delay(0.35, function()
                 canJump = true
             end)
         end
-        
-        -- ORIENTAÇÃO
-        local upVec = surfaceNormal
+
+        -- ORIENTAÇÃO: em pé na superfície
+        local upVec   = surfNormal
         local lookVec = forward
-        local rightVec = lookVec:Cross(upVec).Unit
-        lookVec = upVec:Cross(rightVec).Unit
-        
+        if lookVec.Magnitude < 0.01 then
+            lookVec = Vector3.new(0,0,-1)
+        end
+
+        local rightVec = lookVec:Cross(upVec)
+        if rightVec.Magnitude < 0.01 then
+            rightVec = Vector3.new(1,0,0)
+        end
+        rightVec = rightVec.Unit
+        lookVec  = upVec:Cross(rightVec).Unit
+
         local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
-        bodyGyro.CFrame = targetCF
+        gyroObj.CFrame = targetCF
     end)
 end
 
@@ -321,29 +446,28 @@ local function desligar()
         loop:Disconnect()
         loop = nil
     end
-    
     if mobileControls then
         mobileControls.destroy()
         mobileControls = nil
     end
-    
+    if animTrack then
+        animTrack:Stop()
+        animTrack = nil
+    end
+
+    enableDefaultControls()
+
     local char = player.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
         local hrp = char:FindFirstChild("HumanoidRootPart")
-        
-        if hum then
-            hum.PlatformStand = false
-        end
-        
+        if hum then hum.PlatformStand = false end
         if hrp then
-            for _, obj in ipairs(hrp:GetChildren()) do
-                if obj:IsA("BodyVelocity") or obj:IsA("BodyGyro") then
-                    obj:Destroy()
-                end
-            end
-            
-            hrp.AssemblyLinearVelocity = Vector3.zero
+            local v = hrp:FindFirstChild("LagatixaVel")
+            local g = hrp:FindFirstChild("LagatixaGyro")
+            if v then v:Destroy() end
+            if g then g:Destroy() end
+            hrp.AssemblyLinearVelocity  = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end
     end
@@ -362,71 +486,57 @@ local function criarGUI()
     gui.Parent = player.PlayerGui
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 280, 0, 120)
-    frame.Position = UDim2.new(0.5, -140, 0, 20)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-    frame.BorderSizePixel = 2
-    frame.BorderColor3 = Color3.fromRGB(0, 170, 255)
+    frame.Size = UDim2.new(0, 220, 0, 100)
+    frame.Position = UDim2.new(0.5, -110, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
+    frame.BorderSizePixel = 0
     frame.Active = true
     frame.Draggable = true
     frame.Parent = gui
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = Color3.fromRGB(0, 170, 255)
+    stroke.Thickness = 2
 
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 40)
-    title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-    title.BorderSizePixel = 0
-    title.Text = "🦎 LAGATIXA MOBILE"
-    title.TextColor3 = Color3.fromRGB(0, 200, 255)
+    title.Size = UDim2.new(1, 0, 0, 35)
+    title.BackgroundTransparency = 1
+    title.Text = "🦎 LAGATIXA v11"
+    title.TextColor3 = Color3.fromRGB(0, 220, 255)
     title.TextSize = 18
     title.Font = Enum.Font.GothamBold
     title.Parent = frame
 
-    local status = Instance.new("TextLabel")
-    status.Size = UDim2.new(1, -20, 0, 20)
-    status.Position = UDim2.new(0, 10, 0, 50)
-    status.BackgroundTransparency = 1
-    status.Text = "OFF"
-    status.TextColor3 = Color3.fromRGB(255, 100, 100)
-    status.TextSize = 16
-    status.Font = Enum.Font.GothamBold
-    status.TextXAlignment = Enum.TextXAlignment.Left
-    status.Parent = frame
-
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -20, 0, 40)
-    btn.Position = UDim2.new(0, 10, 1, -50)
+    btn.Size = UDim2.new(1, -20, 0, 45)
+    btn.Position = UDim2.new(0, 10, 0, 45)
     btn.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
     btn.BorderSizePixel = 0
-    btn.Text = "LIGAR"
+    btn.Text = "▶ LIGAR"
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
     btn.TextSize = 18
     btn.Font = Enum.Font.GothamBold
     btn.Parent = frame
-
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
 
     btn.MouseButton1Click:Connect(function()
         ativo = not ativo
-        
         if ativo then
-            btn.Text = "DESLIGAR"
+            btn.Text = "■ DESLIGAR"
             btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-            status.Text = "ON ✓"
-            status.TextColor3 = Color3.fromRGB(100, 255, 100)
+            TweenService:Create(stroke, TweenInfo.new(0.3), {Color = Color3.fromRGB(0, 255, 100)}):Play()
             ligar()
         else
-            btn.Text = "LIGAR"
+            btn.Text = "▶ LIGAR"
             btn.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
-            status.Text = "OFF"
-            status.TextColor3 = Color3.fromRGB(255, 100, 100)
+            TweenService:Create(stroke, TweenInfo.new(0.3), {Color = Color3.fromRGB(0, 170, 255)}):Play()
             desligar()
         end
     end)
 end
 
 -- ==============================
--- INICIO
+-- INÍCIO
 -- ==============================
 criarGUI()
 
@@ -438,4 +548,4 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
-print("[LAGATIXA MOBILE] Pronto!")
+print("[LAGATIXA v11] Pronto!")
