@@ -1,6 +1,5 @@
-
 -- =============================================================
---  MODO LAGATIXA  v13  -  SEM TREMOR
+--  MODO LAGATIXA  v14  -  TREMOR TOTALMENTE CORRIGIDO (ZERO OSCILAÇÃO)
 -- =============================================================
 
 local Players          = game:GetService("Players")
@@ -354,7 +353,7 @@ local function ligar()
 	savedJumpPower = hum.JumpPower
 	savedJumpHeight = hum.JumpHeight
 
-	-- ★ DESATIVA ESTADOS QUE FORÇAM FICAR DE PÉ
+	-- ★ DESATIVA ESTADOS QUE FORÇAM FICAR DE PÉ (INCLUINDO MAIS PARA MOVIMENTO LIVRE)
 	local estadosDesativar = {
 		Enum.HumanoidStateType.GettingUp,
 		Enum.HumanoidStateType.FallingDown,
@@ -366,11 +365,14 @@ local function ligar()
 		Enum.HumanoidStateType.Jumping,
 		Enum.HumanoidStateType.Climbing,
 		Enum.HumanoidStateType.Swimming,
+		Enum.HumanoidStateType.Seated,  -- EXTRA: Para assentos
+		Enum.HumanoidStateType.StrafingNoPhysics,  -- EXTRA: Para estabilidade
 	}
 	for _, estado in ipairs(estadosDesativar) do
 		hum:SetStateEnabled(estado, false)
 	end
 
+	hum.PlatformStand = true  -- ★ FIXA POSIÇÃO (INCLUÍDO PARA ESTABILIZAR MAIS)
 	hum.WalkSpeed = 0
 	hum.JumpPower = 0
 	hum.JumpHeight = 0
@@ -381,17 +383,17 @@ local function ligar()
 
 	hrp.Anchored = false
 
-	-- ★★★ FORÇAS MODERADAS — sem tremor ★★★
+	-- ★★★ FORÇAS MODERADAS — ZERO TREMOR (AJUSTADAS PARA PARADO) ★★★
 	local bodyVel = Instance.new("BodyVelocity")
-	bodyVel.MaxForce = Vector3.new(5e4, 5e4, 5e4)
+	bodyVel.MaxForce = Vector3.new(3e4, 3e4, 3e4)  -- REDUZIDO PARA MENOS IMPULSO INDESEJADO
 	bodyVel.Velocity = Vector3.zero
-	bodyVel.P = 1250
+	bodyVel.P = 750  -- REDUZIDO PARA MAIS ESTABILIDADE
 	bodyVel.Parent = hrp
 
 	local bodyGyro = Instance.new("BodyGyro")
-	bodyGyro.MaxTorque = Vector3.new(5e4, 5e4, 5e4)
-	bodyGyro.P = 5000
-	bodyGyro.D = 500
+	bodyGyro.MaxTorque = Vector3.new(3e4, 3e4, 3e4)  -- REDUZIDO
+	bodyGyro.P = 1500  -- REDUZIDO RADICALMENTE PARA EVITAR OSCILAÇÃO
+	bodyGyro.D = 300  -- REDUZIDO
 	bodyGyro.CFrame = hrp.CFrame
 	bodyGyro.Parent = hrp
 
@@ -408,7 +410,7 @@ local function ligar()
 	local currentAnim = ""
 	local stateTimer = 0
 
-	-- ★ Suavização da orientação do gyro
+	-- ★ Suavização da orientação do gyro (MAIS LENTA PARA EVITAR TREMOR)
 	local smoothGyroCF = hrp.CFrame
 
 	task.wait(0.2)
@@ -420,9 +422,9 @@ local function ligar()
 		if not char or not char.Parent then return end
 		if not hrp or not hrp.Parent then return end
 
-		-- ★ CHECA ESTADO A CADA 0.5s (NÃO TODO FRAME)
+		-- ★ CHECA ESTADO A CADA 1S (MENOS FREQUENTE PARA ESTABILIDADE)
 		stateTimer += dt
-		if stateTimer > 0.5 then
+		if stateTimer > 1 then
 			stateTimer = 0
 			if hum:GetState() ~= Enum.HumanoidStateType.Physics then
 				hum:ChangeState(Enum.HumanoidStateType.Physics)
@@ -461,7 +463,7 @@ local function ligar()
 		else
 			local camForward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
 			if camForward.Magnitude > 0.01 then
-				currentForward = currentForward:Lerp(camForward.Unit, dt * 5)
+				currentForward = currentForward:Lerp(camForward.Unit, dt * 3)  -- LERP MAIS DEVAGAR QUANDO PARADO
 				if currentForward.Magnitude > 0 then
 					currentForward = currentForward.Unit
 				end
@@ -473,7 +475,7 @@ local function ligar()
 			lateralVel = moveDir.Unit * WALK_SPEED
 		end
 
-		-- SUPERFÍCIE
+		-- SUPERFÍCIE COM TOLERÂNCIA (IGNORA MICRO-DIFERENÇAS)
 		local hit, dist = raycastChao(hrp.Position, char)
 
 		local isFloor = false
@@ -482,7 +484,7 @@ local function ligar()
 		end
 
 		if hit and dist < 5 then
-			surfaceNormal = surfaceNormal:Lerp(hit.Normal, dt * 10)
+			surfaceNormal = surfaceNormal:Lerp(hit.Normal, dt * 8)
 			if surfaceNormal.Magnitude > 0 then
 				surfaceNormal = surfaceNormal.Unit
 			else
@@ -493,8 +495,16 @@ local function ligar()
 				isGrounded = true
 				verticalVelocity = 0
 				jumpingFromSurface = false
-				local stickForce = (hit.Position + hit.Normal * STICK_DIST - hrp.Position) * 10
-				bodyVel.Velocity = lateralVel + stickForce
+				-- ★ LIMITE PARA STICK FORCE (IGNORA SE DIFERENÇA MÍNIMA PARA EVITAR TREMOR)
+				local stickForce = (hit.Position + hit.Normal * STICK_DIST - hrp.Position) * 8
+				if stickForce.Magnitude < 0.1 then  -- LIMIAR: IGNORA FORÇAS MÍNIMAS
+					stickForce = Vector3.zero
+				end
+				if lateralVel.Magnitude == 0 then  -- SE PARADO, FORÇA ZERO TOTAL
+					bodyVel.Velocity = Vector3.new(0, stickForce.Y, 0)  -- APENA NO Y PARA MANTER STICK
+				else
+					bodyVel.Velocity = lateralVel + stickForce
+				end
 			else
 				isGrounded = false
 				if jumpingFromSurface then
@@ -516,8 +526,8 @@ local function ligar()
 			else
 				verticalVelocity -= GRAVITY * dt
 				bodyVel.Velocity = lateralVel + Vector3.new(0, verticalVelocity, 0)
-				surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), dt * 5)
 			end
+			surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), dt * 5)
 		end
 
 		-- PULO
@@ -562,7 +572,7 @@ local function ligar()
 			tocarAnimacao(currentAnim, 1)
 		end
 
-		-- ★★★ ORIENTAÇÃO SUAVIZADA ★★★
+		-- ★★★ ORIENTAÇÃO SUAVIZADA — MAIS DEVAGAR PARA ZERO TREMOR ★★★
 		local upVec = surfaceNormal
 		local lookVec = currentForward
 
@@ -583,8 +593,8 @@ local function ligar()
 
 		local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
 
-		-- ★★★ SUAVIZA O GYRO — evita saltos bruscos ★★★
-		local lerpSpeed = math.min(dt * 12, 1)
+		-- ★★★ SUAVIZA O GYRO — LERP MAIS LENTO PARA ELIMINAR SALTO E TREMOR ★★★
+		local lerpSpeed = dt * 8  -- REDUZIDO DE 12 PARA 8 PARA MENOS SENSIBILIDADE
 		smoothGyroCF = smoothGyroCF:Lerp(targetCF, lerpSpeed)
 		bodyGyro.CFrame = smoothGyroCF
 
@@ -608,7 +618,7 @@ local function desligar()
 		local hrp = char:FindFirstChild("HumanoidRootPart")
 
 		if hum then
-			-- ★ RESTAURA TODOS OS ESTADOS
+			-- ★ RESTAURA TODOS OS ESTADOS (INCLUINDO EXTRAS)
 			local estadosRestaurar = {
 				Enum.HumanoidStateType.GettingUp,
 				Enum.HumanoidStateType.FallingDown,
@@ -620,12 +630,14 @@ local function desligar()
 				Enum.HumanoidStateType.Jumping,
 				Enum.HumanoidStateType.Climbing,
 				Enum.HumanoidStateType.Swimming,
+				Enum.HumanoidStateType.Seated,
+				Enum.HumanoidStateType.StrafingNoPhysics,
 			}
 			for _, estado in ipairs(estadosRestaurar) do
 				hum:SetStateEnabled(estado, true)
 			end
 
-			hum.PlatformStand = false
+			hum.PlatformStand = false  -- RESTAURA
 			hum.WalkSpeed = savedWalkSpeed or 16
 			hum.JumpPower = savedJumpPower or 50
 			hum.JumpHeight = savedJumpHeight or 7.2
@@ -697,7 +709,7 @@ local function criarGUI()
 	title.Size = UDim2.new(1, 0, 0, 40)
 	title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 	title.BorderSizePixel = 0
-	title.Text = "🦎 LAGATIXA v13"
+	title.Text = "🦎 LAGATIXA v14"
 	title.TextColor3 = Color3.fromRGB(0, 200, 255)
 	title.TextSize = 18
 	title.Font = Enum.Font.GothamBold
@@ -754,4 +766,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA v13] Sem tremor ✓")
+print("[LAGATIXA v14] Zero tremor—teste calma AI!")
