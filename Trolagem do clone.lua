@@ -29,8 +29,7 @@ local animState = {
     moveSpeed = 0,
     isGrounded = true,
     verticalVelocity = 0,
-    phase = "idle",
-    tailSegments = {} -- Guarda as partes do rabo para limpar depois
+    phase = "idle"
 }
 
 -- ==============================
@@ -70,198 +69,108 @@ end
 -- ==============================
 -- SISTEMA DE ANIMAÇÃO MANUAL
 -- ==============================
-local bodyMotors = {} -- Tabela para guardar os Motor6D e suas C0 originais
+local bodyMotors = {} 
 local animationTime = 0
 
-local function encontrarMotors(char)
-    bodyMotors = {}
-    local motorNames = {
-        "Left Shoulder", "Right Shoulder", "Left Hip", "Right Hip",
-        "Neck", "Waist" -- Para R6, se for R15, são outros nomes
-    }
-    
-    -- Para R15 Completo
-    local r15Motors = {
-        "LeftShoulder", "RightShoulder", "LeftHip", "RightHip",
-        "Neck", "Waist", "Root", "LeftElbow", "RightElbow", "LeftKnee", "RightKnee",
-        "LeftWrist", "RightWrist", "LeftAnkle", "RightAnkle"
-    }
-    
-    -- Tenta encontrar os motors no personagem
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("Motor6D") then
-            local motorName = part.Name
-            -- Verifica se é um motor que queremos animar
-            for _, name in ipairs(r15Motors) do
-                if motorName == name then
-                    bodyMotors[motorName] = {
-                        motor = part,
-                        originalC0 = part.C0,
-                        originalC1 = part.C1
-                    }
-                    break
-                end
+local function removerRabo(char)
+    for _, obj in ipairs(char:GetDescendants()) do
+        if (obj:IsA("Accessory") or obj:IsA("BasePart")) and (obj.Name:lower():find("tail") or obj.Name:lower():find("rabo")) then
+            if obj:IsA("Accessory") then
+                obj:Destroy()
+            else
+                obj.Transparency = 1
+                obj.CanCollide = false
             end
-        elseif part.Name:find("TailSegMotor") then
-            -- Captura os motores do rabo criado procedimentalmente
-            bodyMotors[part.Name] = {
-                motor = part,
-                originalC0 = part.C0,
-                originalC1 = part.C1
-            }
         end
     end
 end
 
--- ==============================
--- GERADOR DE RABO (TRANSFORMA CABELO)
--- ==============================
-local function criarRabo(char)
-    -- Limpa rabo anterior se existir
-    for _, obj in ipairs(animState.tailSegments) do
-        if obj then obj:Destroy() end
-    end
-    animState.tailSegments = {}
-
-    local corRabo = Color3.fromRGB(50, 70, 50) -- Cor padrão (verde escuro)
+local function encontrarMotors(char)
+    bodyMotors = {}
     
-    -- Tenta pegar a cor do cabelo para o rabo
-    for _, acc in ipairs(char:GetChildren()) do
-        if acc:IsA("Accessory") then
-            local handle = acc:FindFirstChild("Handle")
-            if handle and (acc.Name:lower():find("hair") or handle:FindFirstChildOfClass("SpecialMesh")) then
-                corRabo = handle.Color
-                handle.Transparency = 1 
+    local mapping = {
+        ["LeftShoulder"] = {"LeftShoulder", "Left Shoulder"},
+        ["RightShoulder"] = {"RightShoulder", "Right Shoulder"},
+        ["LeftHip"] = {"LeftHip", "Left Hip"},
+        ["RightHip"] = {"RightHip", "Right Hip"},
+        ["Neck"] = {"Neck"},
+        ["Waist"] = {"Waist", "RootJoint", "Root Joint"},
+        ["Root"] = {"LowerTorso", "Root"}
+    }
+    
+    for _, motor in ipairs(char:GetDescendants()) do
+        if motor:IsA("Motor6D") then
+            for key, aliases in pairs(mapping) do
+                if bodyMotors[key] then continue end -- Evita duplicatas
+                for _, alias in ipairs(aliases) do
+                    if motor.Name == alias then
+                        bodyMotors[key] = {
+                            motor = motor,
+                            originalC0 = motor.C0,
+                            originalC1 = motor.C1
+                        }
+                        break
+                    end
+                end
             end
         end
-    end
-
-    local parent = char:FindFirstChild("LowerTorso") or char:FindFirstChild("Torso")
-    if not parent then return end
-
-    local lastPart = parent
-    local segments = 6 -- Um pouco mais longo
-    local config = {
-        sizeStart = 0.7,
-        sizeEnd = 0.15,
-        length = 0.5
-    }
-
-    for i = 1, segments do
-        local seg = Instance.new("Part")
-        seg.Name = "LizardTailSeg" .. i
-        seg.Size = Vector3.new(
-            config.sizeStart - (i * (config.sizeStart - config.sizeEnd) / segments),
-            config.sizeStart - (i * (config.sizeStart - config.sizeEnd) / segments),
-            config.length
-        )
-        seg.Color = corRabo
-        seg.Material = Enum.Material.SmoothPlastic
-        seg.CanCollide = false
-        seg.Massless = true
-        seg.Parent = char
-        
-        local mesh = Instance.new("SpecialMesh", seg)
-        mesh.MeshType = Enum.MeshType.Sphere 
-        
-        local motor = Instance.new("Motor6D")
-        motor.Name = "TailSegMotor" .. i
-        motor.Part0 = lastPart
-        motor.Part1 = seg
-        
-        if i == 1 then
-            motor.C0 = CFrame.new(0, -0.2, 0.5) * CFrame.Angles(math.rad(-15), 0, 0)
-        else
-            motor.C0 = CFrame.new(0, 0, config.length * 0.8)
-        end
-        motor.C1 = CFrame.new(0, 0, -config.length * 0.2)
-        
-        motor.Parent = lastPart
-        lastPart = seg
-        table.insert(animState.tailSegments, seg)
     end
 end
 
 local function animarPersonagem(dt, isMoving, moveSpeed)
-    local breathing = math.sin(tick() * 1.5) * 0.015
-    local twitch = math.noise(tick() * 5, 0, 0) * 0.02 -- Micro-tremor aleatório
+    local t = tick()
+    local breathing = math.sin(t * 1.5) * 0.02
     
-    -- Atualiza o tempo da animação (sempre rodando para o rabo)
-    local cycleSpeed = isMoving and (12 + (moveSpeed * 6)) or 3
-    animationTime = animationTime + dt * cycleSpeed
+    if not isMoving then
+        -- Pose Idle de Réptil (corpo baixo, patas abertas)
+        for name, data in pairs(bodyMotors) do
+            local motor = data.motor
+            local target = data.originalC0
+            
+            if name == "LeftShoulder" or name == "RightShoulder" then
+                local side = (name == "LeftShoulder" and -1 or 1)
+                target = target * CFrame.Angles(0, 0, side * math.rad(25))
+            elseif name == "LeftHip" or name == "RightHip" then
+                local side = (name == "LeftHip" and -1 or 1)
+                target = target * CFrame.Angles(0, 0, side * math.rad(25))
+            elseif name == "Root" or name == "Waist" then
+                target = target * CFrame.new(0, -0.2 + breathing, 0)
+            end
+            
+            motor.C0 = motor.C0:Lerp(target, dt * 6)
+        end
+        return
+    end
     
-    local sin = math.sin(animationTime)
-    local cos = math.cos(animationTime)
+    -- ANIMAÇÃO DE RASTEJAR PREMIUM (Sinuosidade Intensificada)
+    local speed = 12 + (moveSpeed * 6)
+    animationTime = animationTime + dt * speed
     
-    -- Configurações de amplitude
-    local walkSwing = math.rad(30)
-    local walkSplay = math.rad(18)
-    local spineSway = math.rad(12)
-    local bobAmount = 0.12
+    local cycle = animationTime
+    local sway = math.sin(cycle) * 0.5 -- Balanço lateral do corpo
+    local verticalBob = math.abs(math.sin(cycle * 2)) * 0.15
     
-    for motorName, data in pairs(bodyMotors) do
+    for name, data in pairs(bodyMotors) do
         local motor = data.motor
-        local originalC0 = data.originalC0
-        local targetOffset = CFrame.identity
+        local target = data.originalC0
         
-        if motorName:find("TailSegMotor") then
-            -- ANIMAÇÃO DO RABO (Sempre ativa)
-            local segIndex = tonumber(motorName:match("%d+"))
-            local wave = math.sin(animationTime - (segIndex * 0.6))
-            local intensity = isMoving and (math.rad(15) + (moveSpeed * math.rad(15))) or math.rad(8)
-            targetOffset = CFrame.Angles(0, wave * intensity, 0)
-        elseif not isMoving then
-            -- Lógica IDLE para outros membros
-            if motorName == "LeftShoulder" or motorName == "RightShoulder" then
-                local side = (motorName == "LeftShoulder" and -1 or 1)
-                targetOffset = CFrame.Angles(math.rad(5) + breathing, twitch, side * math.rad(15))
-            elseif motorName == "LeftWrist" or motorName == "RightWrist" then
-                targetOffset = CFrame.Angles(0, 0, (motorName == "LeftWrist" and 1 or -1) * math.rad(10))
-            elseif motorName == "LeftHip" or motorName == "RightHip" then
-                local side = (motorName == "LeftHip" and -1 or 1)
-                targetOffset = CFrame.Angles(math.rad(-10) - breathing, -twitch, side * math.rad(10))
-            elseif motorName == "LeftAnkle" or motorName == "RightAnkle" then
-                targetOffset = CFrame.Angles(math.rad(15), 0, 0)
-            elseif motorName == "Root" then
-                targetOffset = CFrame.new(0, -0.15 + breathing, 0)
-            end
-        else
-            -- Lógica WALKING para outros membros
-            if motorName == "LeftShoulder" then
-                targetOffset = CFrame.Angles(sin * walkSwing, 0, -walkSplay - (cos * math.rad(10)))
-            elseif motorName == "RightShoulder" then
-                targetOffset = CFrame.Angles(-sin * walkSwing, 0, walkSplay + (cos * math.rad(10)))
-            elseif motorName == "LeftWrist" or motorName == "RightWrist" then
-                local side = (motorName == "LeftWrist" and 1 or -1)
-                local rot = (motorName == "LeftWrist" and sin or -sin)
-                targetOffset = CFrame.Angles(math.rad(10), rot * 0.2, side * math.rad(15))
-            elseif motorName == "LeftHip" then
-                targetOffset = CFrame.Angles(-sin * walkSwing, 0, -walkSplay + (cos * math.rad(10)))
-            elseif motorName == "RightHip" then
-                targetOffset = CFrame.Angles(sin * walkSwing, 0, walkSplay - (cos * math.rad(10)))
-            elseif motorName == "LeftAnkle" or motorName == "RightAnkle" then
-                local rot = (motorName == "LeftAnkle" and -sin or sin)
-                targetOffset = CFrame.Angles(rot * 0.4, 0, 0)
-            elseif motorName == "LeftElbow" or motorName == "RightElbow" then
-                local phase = (motorName == "LeftElbow") and sin or -sin
-                local flexion = (phase > 0) and (phase * math.rad(35)) or 0
-                targetOffset = CFrame.Angles(-math.rad(20) - flexion, 0, 0)
-            elseif motorName == "LeftKnee" or motorName == "RightKnee" then
-                local phase = (motorName == "LeftKnee") and -sin or sin
-                local flexion = (phase > 0) and (phase * math.rad(35)) or 0
-                targetOffset = CFrame.Angles(math.rad(20) + flexion, 0, 0)
-            elseif motorName == "Root" then
-                local vBob = math.abs(cos) * bobAmount
-                targetOffset = CFrame.new(0, -0.1 + vBob, 0) * CFrame.Angles(0, cos * spineSway, 0)
-            elseif motorName == "Waist" then
-                targetOffset = CFrame.Angles(0, cos * (spineSway * 0.5), 0)
-            elseif motorName == "Neck" then
-                targetOffset = CFrame.Angles(0, -cos * (spineSway * 1.5), 0)
-            end
+        -- Movimento de patas cruzadas (Diagonal) com amplitude aumentada
+        if name == "LeftShoulder" or name == "RightHip" then
+            local move = math.sin(cycle) * 1.2
+            local lift = math.max(0, math.cos(cycle)) * 0.7
+            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.6, 0, 0)
+        elseif name == "RightShoulder" or name == "LeftHip" then
+            local move = math.sin(cycle + math.pi) * 1.2
+            local lift = math.max(0, math.cos(cycle + math.pi)) * 0.7
+            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.6, 0, 0)
+        elseif name == "Root" or name == "Waist" then
+            -- Sinuosidade da coluna
+            target = target * CFrame.new(sway * 0.4, -0.2 + verticalBob, 0) * CFrame.Angles(0, -sway, 0)
+        elseif name == "Neck" then
+            target = target * CFrame.Angles(0, sway * 1.5, 0)
         end
         
-        -- Garante que o motor seja atualizado com lerp
-        motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, 0.35)
+        motor.C0 = motor.C0:Lerp(target, math.clamp(dt * 15, 0, 1))
     end
 end
 
@@ -503,10 +412,10 @@ local function ligar()
         track:Stop(0)
     end
 
-    -- Cria o rabo procedimental antes de encontrar os motors
-    criarRabo(char)
+    -- Limpeza de acessórios indesejados
+    removerRabo(char)
     
-    -- Encontra os motors para animação manual (inclusive os do rabo agora)
+    -- Encontra os motors para animação manual
     encontrarMotors(char)
     
     hum.PlatformStand = true
@@ -745,21 +654,6 @@ local function desligar()
             end
         end
         
-        -- Limpa o rabo
-        for _, seg in ipairs(animState.tailSegments) do
-            if seg then seg:Destroy() end
-        end
-
-        -- Mostra o cabelo de volta (targeting hair specifically)
-        for _, acc in ipairs(char:GetChildren()) do
-            if acc:IsA("Accessory") then
-                local handle = acc:FindFirstChild("Handle")
-                if handle and (acc.Name:lower():find("hair") or handle:FindFirstChildOfClass("SpecialMesh")) then
-                    handle.Transparency = 0 
-                end
-            end
-        end
-        
         -- Limpa a tabela de motors
         bodyMotors = {}
 
@@ -775,12 +669,15 @@ local function desligar()
         end
     end
     
-    -- Reseta estado da animação mantendo a referência se necessário
-    animState.tailSegments = {}
-    animState.time = 0
-    animState.isMoving = false
-    animState.moveSpeed = 0
-    
+    -- Reseta estado da animação
+    animState = {
+        time = 0,
+        isMoving = false,
+        moveSpeed = 0,
+        isGrounded = true,
+        verticalVelocity = 0,
+        phase = "idle"
+    }
     animationTime = 0
     neckRotation = CFrame.identity
 end
