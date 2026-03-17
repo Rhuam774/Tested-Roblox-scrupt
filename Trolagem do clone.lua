@@ -1,40 +1,37 @@
-
 -- =============================================================
---  MODO LAGATIXA  v10  -  VERSÃO MOBILE COMPLETA
+--  MODO LAGATIXA  v14  -  SEM TREMOR (CORRIGIDO)
 -- =============================================================
-
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local TweenService     = game:GetService("TweenService")
+ 
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- ==============================
--- CONSTANTES
--- ==============================
-local WALK_SPEED   = 16
-local JUMP_POWER   = 50
-local GRAVITY      = 196.2
-local STICK_DIST   = 3
+local WALK_SPEED = 16
+local JUMP_POWER = 50
+local GRAVITY    = 196.2
+local STICK_DIST = 1.5
 
--- ==============================
--- ESTADO
--- ==============================
 local ativo = false
 local loop = nil
 local mobileControls = nil
 local animTracks = {}
+local animInstances = {}
 
--- ==============================
--- RAYCAST SIMPLES
--- ==============================
+local savedWalkSpeed = 16
+local savedJumpPower = 50
+local savedJumpHeight = 7.2
+
+-- =============================================================
+-- RAYCAST — múltiplas direções, range reduzido (anti-tremor)
+-- =============================================================
 local function raycastChao(pos, char)
 	local params = RaycastParams.new()
 	params.FilterDescendantsInstances = {char}
 	params.FilterType = Enum.RaycastFilterType.Exclude
 
-	local dirs = {
+	local directions = {
 		Vector3.new(0, -1, 0),
 		Vector3.new(0, 1, 0),
 		Vector3.new(1, 0, 0),
@@ -43,11 +40,12 @@ local function raycastChao(pos, char)
 		Vector3.new(0, 0, -1),
 	}
 
+	local rayDist = 5
 	local melhorHit = nil
 	local melhorDist = math.huge
 
-	for _, dir in ipairs(dirs) do
-		local result = workspace:Raycast(pos, dir * 10, params)
+	for _, dir in ipairs(directions) do
+		local result = workspace:Raycast(pos, dir * rayDist, params)
 		if result then
 			local dist = (result.Position - pos).Magnitude
 			if dist < melhorDist then
@@ -61,68 +59,104 @@ local function raycastChao(pos, char)
 end
 
 -- ==============================
--- SISTEMA DE ANIMAÇÕES
+-- ANIMAÇÕES
 -- ==============================
 local function pararTodasAnimacoes()
-	for nome, track in pairs(animTracks) do
+	for _, track in pairs(animTracks) do
 		if track and track.IsPlaying then
 			track:Stop(0.2)
 		end
 	end
 end
 
+local function limparAnimacoes()
+	pararTodasAnimacoes()
+	animTracks = {}
+	for _, inst in ipairs(animInstances) do
+		if inst and inst.Parent then inst:Destroy() end
+	end
+	animInstances = {}
+end
+
 local function carregarAnimacoes(char)
 	local hum = char:FindFirstChildOfClass("Humanoid")
-	if not hum then return end
+	if not hum then return false end
 
-	animTracks = {}
+	limparAnimacoes()
 
-	-- IDs de animação padrão do Roblox (R15)
-	local anims = {
-		idle = "rbxassetid://180435571",
-		walk = "rbxassetid://180426354",
-		jump = "rbxassetid://125750702",
-		fall = "rbxassetid://180436148",
-	}
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = hum
+	end
 
+	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+		track:Stop(0)
+	end
+
+	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
+
+	local anims
+	if isR6 then
+		anims = {
+			idle = "rbxassetid://180435571",
+			walk = "rbxassetid://180426354",
+			jump = "rbxassetid://125750702",
+			fall = "rbxassetid://180436148",
+		}
+	else
+		anims = {
+			idle = "rbxassetid://507766666",
+			walk = "rbxassetid://507777826",
+			jump = "rbxassetid://507765000",
+			fall = "rbxassetid://507767968",
+		}
+	end
+
+	local carregadas = 0
 	for nome, id in pairs(anims) do
-		local ok, err = pcall(function()
+		local ok = pcall(function()
 			local animObj = Instance.new("Animation")
 			animObj.AnimationId = id
-			local track = hum:LoadAnimation(animObj)
+			animObj.Name = "Lagatixa_" .. nome
+			animObj.Parent = char
+
+			local track = animator:LoadAnimation(animObj)
+			track.Priority = Enum.AnimationPriority.Action3
+			track.Looped = (nome ~= "jump")
+
 			animTracks[nome] = track
-			animObj:Destroy()
+			table.insert(animInstances, animObj)
+			carregadas = carregadas + 1
 		end)
-		if not ok then
-			warn("[LAGATIXA] Erro ao carregar animação " .. nome .. ": " .. tostring(err))
-		end
 	end
+
+	return carregadas > 0
 end
 
 local function tocarAnimacao(nome, velocidade)
 	velocidade = velocidade or 1
-
 	local track = animTracks[nome]
 	if not track then return end
 
-	if track.IsPlaying then
+	if currentAnim == nome and track.IsPlaying then
 		track:AdjustSpeed(velocidade)
 		return
 	end
 
-	-- Para outras animações
 	for n, t in pairs(animTracks) do
 		if n ~= nome and t and t.IsPlaying then
 			t:Stop(0.2)
 		end
 	end
 
+	currentAnim = nome
 	track:Play(0.2)
 	track:AdjustSpeed(velocidade)
 end
 
 -- ==============================
--- CONTROLES MOBILE COM SETAS
+-- CONTROLES MOBILE
 -- ==============================
 local function criarControlesMobile()
 	local gui = player.PlayerGui:FindFirstChild("LagatixaGUI")
@@ -152,19 +186,14 @@ local function criarControlesMobile()
 		btn.Font = Enum.Font.GothamBold
 		btn.Parent = parentFrame
 		btn.AutoButtonColor = false
-
-		local corner = Instance.new("UICorner", btn)
-		corner.CornerRadius = UDim.new(0, 12)
-
+		Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
 		local stroke = Instance.new("UIStroke", btn)
 		stroke.Color = Color3.fromRGB(0, 150, 255)
 		stroke.Thickness = 2
 		stroke.Transparency = 0.4
-
 		return btn
 	end
 
-	-- D-PAD
 	local dpadFrame = Instance.new("Frame")
 	dpadFrame.Name = "DPad"
 	dpadFrame.Size = UDim2.new(0, 205, 0, 205)
@@ -172,10 +201,10 @@ local function criarControlesMobile()
 	dpadFrame.BackgroundTransparency = 1
 	dpadFrame.Parent = controls
 
-	local btnCima   = criarSeta("Cima",   "▲", 70, 0,   dpadFrame)
-	local btnBaixo  = criarSeta("Baixo",  "▼", 70, 140, dpadFrame)
-	local btnEsq    = criarSeta("Esq",    "◀", 0,  70,  dpadFrame)
-	local btnDir    = criarSeta("Dir",     "▶", 140, 70, dpadFrame)
+	local btnCima  = criarSeta("Cima",  "▲", 70, 0,   dpadFrame)
+	local btnBaixo = criarSeta("Baixo", "▼", 70, 140, dpadFrame)
+	local btnEsq   = criarSeta("Esq",  "◀", 0,  70,  dpadFrame)
+	local btnDir   = criarSeta("Dir",  "▶", 140, 70, dpadFrame)
 
 	local centro = Instance.new("Frame")
 	centro.Size = UDim2.new(0, 55, 0, 55)
@@ -186,7 +215,6 @@ local function criarControlesMobile()
 	centro.Parent = dpadFrame
 	Instance.new("UICorner", centro).CornerRadius = UDim.new(0, 10)
 
-	-- BOTÃO PULO
 	local jumpBtn = Instance.new("TextButton")
 	jumpBtn.Name = "JumpBtn"
 	jumpBtn.Size = UDim2.new(0, 90, 0, 90)
@@ -200,11 +228,8 @@ local function criarControlesMobile()
 	jumpBtn.Font = Enum.Font.GothamBold
 	jumpBtn.AutoButtonColor = false
 	jumpBtn.Parent = controls
-
 	Instance.new("UICorner", jumpBtn).CornerRadius = UDim.new(1, 0)
-	local jumpStroke = Instance.new("UIStroke", jumpBtn)
-	jumpStroke.Color = Color3.fromRGB(0, 255, 150)
-	jumpStroke.Thickness = 3
+	Instance.new("UIStroke", jumpBtn).Color = Color3.fromRGB(0, 255, 150)
 
 	local jumpLabel = Instance.new("TextLabel")
 	jumpLabel.Size = UDim2.new(1, 0, 0, 20)
@@ -216,7 +241,6 @@ local function criarControlesMobile()
 	jumpLabel.Font = Enum.Font.GothamBold
 	jumpLabel.Parent = jumpBtn
 
-	-- ESTADO DAS SETAS
 	local pressing = { Cima = false, Baixo = false, Esq = false, Dir = false }
 
 	local function atualizarMove()
@@ -228,8 +252,8 @@ local function criarControlesMobile()
 		if pressing.Dir then moveX = moveX + 1 end
 	end
 
-	local corNormal  = Color3.fromRGB(30, 30, 50)
-	local corPress   = Color3.fromRGB(0, 120, 255)
+	local corNormal = Color3.fromRGB(30, 30, 50)
+	local corPress  = Color3.fromRGB(0, 120, 255)
 
 	local function conectarSeta(btn, nome)
 		btn.InputBegan:Connect(function(input)
@@ -250,23 +274,21 @@ local function criarControlesMobile()
 		end)
 	end
 
-	conectarSeta(btnCima,  "Cima")
+	conectarSeta(btnCima, "Cima")
 	conectarSeta(btnBaixo, "Baixo")
-	conectarSeta(btnEsq,   "Esq")
-	conectarSeta(btnDir,    "Dir")
+	conectarSeta(btnEsq, "Esq")
+	conectarSeta(btnDir, "Dir")
 
 	jumpBtn.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			wantsJump = true
 			jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-			jumpBtn.BackgroundTransparency = 0.1
 		end
 	end)
 	jumpBtn.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			wantsJump = false
 			jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
-			jumpBtn.BackgroundTransparency = 0.2
 		end
 	end)
 
@@ -280,82 +302,36 @@ local function criarControlesMobile()
 end
 
 -- ==============================
--- CABEÇA OLHA PRA CÂMERA
+-- CABEÇA
 -- ==============================
-local function atualizarCabeca(char, surfaceNormal)
+local function atualizarCabeca(char)
 	local neck = nil
-
-	-- Procura o Motor6D do pescoço
-	local head = char:FindFirstChild("Head")
-	if head then
-		for _, obj in ipairs(head:GetChildren()) do
-			if obj:IsA("Motor6D") and obj.Name == "Neck" then
-				neck = obj
-				break
-			end
-		end
-	end
-
-	if not neck then
-		-- Tenta achar no UpperTorso (R15)
-		local upperTorso = char:FindFirstChild("UpperTorso")
-		if upperTorso then
-			for _, obj in ipairs(upperTorso:GetChildren()) do
+	for _, partName in ipairs({"Head", "UpperTorso", "Torso"}) do
+		local part = char:FindFirstChild(partName)
+		if part then
+			for _, obj in ipairs(part:GetChildren()) do
 				if obj:IsA("Motor6D") and obj.Name == "Neck" then
 					neck = obj
 					break
 				end
 			end
 		end
+		if neck then break end
 	end
+	if not neck or not neck.Part0 then return end
 
-	if not neck then
-		-- Tenta no Torso (R6)
-		local torso = char:FindFirstChild("Torso")
-		if torso then
-			for _, obj in ipairs(torso:GetChildren()) do
-				if obj:IsA("Motor6D") and obj.Name == "Neck" then
-					neck = obj
-					break
-				end
-			end
-		end
-	end
+	local localLook = neck.Part0.CFrame:VectorToObjectSpace(camera.CFrame.LookVector)
+	local yaw = math.clamp(math.atan2(-localLook.X, -localLook.Z), -1.2, 1.2)
+	local pitch = math.clamp(math.asin(math.clamp(localLook.Y, -1, 1)), -1.0, 1.0)
 
-	if not neck then return end
-
-	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
-
-	-- Direção da câmera relativa ao corpo
-	local camLook = camera.CFrame.LookVector
-
-	-- Converte para espaço local do torso
-	local torsoParent = neck.Part0
-	if not torsoParent then return end
-
-	local torsoCF = torsoParent.CFrame
-	local localLook = torsoCF:VectorToObjectSpace(camLook)
-
-	-- Calcula ângulos
-	local yaw = math.atan2(-localLook.X, -localLook.Z)
-	local pitch = math.asin(math.clamp(localLook.Y, -1, 1))
-
-	-- Limita os ângulos para não parecer estranho
-	yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
-	pitch = math.clamp(pitch, -math.rad(60), math.rad(60))
-
-	-- Aplica no C0 do Neck (preservando a posição original)
-	local originalC0 = CFrame.new(0, 1, 0) -- Posição padrão R15
-	
-	-- Detecta se é R6
 	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
+	local base
 	if isR6 then
-		originalC0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+		base = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+	else
+		base = CFrame.new(0, 1, 0)
 	end
-
-	local rotacao = CFrame.Angles(pitch, yaw, 0)
-	neck.C0 = originalC0 * rotacao
+	neck.C0 = base * CFrame.Angles(pitch, yaw, 0)
 end
 
 -- ==============================
@@ -367,71 +343,78 @@ local function ligar()
 
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	local hum = char:FindFirstChildOfClass("Humanoid")
-
 	if not hrp or not hum then return end
 
-	-- Para animações padrão do Roblox
 	local animate = char:FindFirstChild("Animate")
-	if animate then
-		animate.Disabled = true
+	if animate then animate.Disabled = true end
+
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if animator then
+		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			track:Stop(0)
+		end
 	end
 
-	-- Para todas as animações atuais
-	for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-		track:Stop(0)
-	end
-
-	-- Carrega nossas animações
+	task.wait(0.1)
 	carregarAnimacoes(char)
 
+	savedWalkSpeed = hum.WalkSpeed
+	savedJumpPower = hum.JumpPower
+	savedJumpHeight = hum.JumpHeight
+
 	hum.PlatformStand = true
+	hum.AutoRotate = false
+
 	hrp.Anchored = false
 
 	local bodyVel = Instance.new("BodyVelocity")
-	bodyVel.MaxForce = Vector3.new(4e4, 4e4, 4e4)
-	bodyVel.Velocity = Vector3.zero
+	bodyVel.Name = "LagatixaVel"
+	bodyVel.MaxForce = Vector3.new(1e5, 0, 1e5)
+	bodyVel.Velocity = Vector3.new(0, 0, 0)
+	bodyVel.P = 2500
 	bodyVel.Parent = hrp
 
 	local bodyGyro = Instance.new("BodyGyro")
-	bodyGyro.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
+	bodyGyro.Name = "LagatixaGyro"
+	bodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
 	bodyGyro.P = 3000
-	bodyGyro.D = 500
+	bodyGyro.D = 200
 	bodyGyro.CFrame = hrp.CFrame
 	bodyGyro.Parent = hrp
 
 	mobileControls = criarControlesMobile()
-	if not mobileControls then
-		warn("Erro ao criar controles mobile!")
-		return
-	end
+	if not mobileControls then return end
 
-	local surfaceNormal = Vector3.new(0, 1, 0)
-	local verticalVelocity = 0
-	local isGrounded = false
-	local canJump = true
-	local currentForward = Vector3.new(0, 0, -1)
-	local jumpingFromSurface = false
-	local jumpSurfaceNormal = Vector3.new(0, 1, 0)
+	surfaceNormal = Vector3.new(0, 1, 0)
+	verticalVelocity = 0
+	isGrounded = false
+	canJump = true
+	currentForward = hrp.CFrame.LookVector
+	jumpingFromSurface = false
+	jumpSurfaceNormal = Vector3.new(0, 1, 0)
+	currentAnim = ""
+	smoothGyroCF = hrp.CFrame
 
-	-- Estado da animação
-	local currentAnim = "idle"
-	local wasGrounded = true
+	task.wait(0.2)
+	tocarAnimacao("idle", 1)
+
+	local animCheckTimer = 0
 
 	loop = RunService.Heartbeat:Connect(function(dt)
 		if not ativo then return end
 		if not char or not char.Parent then return end
 		if not hrp or not hrp.Parent then return end
 
+		dt = math.min(dt, 0.05)
+
 		local mx = mobileControls.getMoveX()
 		local mz = mobileControls.getMoveZ()
 		local wantsJump = mobileControls.getJump()
 
-		-- DIREÇÕES DA CÂMERA
 		local camCF = camera.CFrame
 		local camLook = camCF.LookVector
 		local camRight = camCF.RightVector
 
-		-- Projeta na superfície
 		local forward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
 		if forward.Magnitude > 0.01 then
 			forward = forward.Unit
@@ -451,34 +434,19 @@ local function ligar()
 
 		if isMoving then
 			currentForward = moveDir.Unit
-		else
-			-- QUANDO PARADO: corpo olha na direção da câmera (projetada na superfície)
-			local camForward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
-			if camForward.Magnitude > 0.01 then
-				currentForward = currentForward:Lerp(camForward.Unit, dt * 5)
-				if currentForward.Magnitude > 0 then
-					currentForward = currentForward.Unit
-				end
-			end
 		end
 
-		-- MOVIMENTO LATERAL
-		local lateralVel = Vector3.zero
+		local lateralVel = Vector3.new(0, 0, 0)
 		if isMoving then
 			lateralVel = moveDir.Unit * WALK_SPEED
 		end
 
-		-- DETECÇÃO DE SUPERFÍCIE
+		-- RAYCAST
 		local hit, dist = raycastChao(hrp.Position, char)
 
-		local isFloor = false
-		if hit then
-			isFloor = hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
-		end
-
-		if hit and dist < 5 then
-			surfaceNormal = surfaceNormal:Lerp(hit.Normal, dt * 10)
-			if surfaceNormal.Magnitude > 0 then
+		if hit and dist < 6 then
+			surfaceNormal = surfaceNormal:Lerp(hit.Normal, math.min(dt * 8, 1))
+			if surfaceNormal.Magnitude > 0.01 then
 				surfaceNormal = surfaceNormal.Unit
 			else
 				surfaceNormal = Vector3.new(0, 1, 0)
@@ -489,40 +457,41 @@ local function ligar()
 				verticalVelocity = 0
 				jumpingFromSurface = false
 
-				local stickForce = (hit.Position + hit.Normal * STICK_DIST - hrp.Position) * 10
+				local targetPos = hit.Position + hit.Normal * STICK_DIST
+				local stickForce = (targetPos - hrp.Position) * 5
 				bodyVel.Velocity = lateralVel + stickForce
 			else
 				isGrounded = false
+				verticalVelocity = verticalVelocity - GRAVITY * dt
 
 				if jumpingFromSurface then
-					verticalVelocity = verticalVelocity - GRAVITY * dt
 					bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
 				else
-					verticalVelocity = verticalVelocity - GRAVITY * dt
 					bodyVel.Velocity = lateralVel + surfaceNormal * verticalVelocity
 				end
 			end
 		else
 			isGrounded = false
+			verticalVelocity = verticalVelocity - GRAVITY * dt
 
 			if jumpingFromSurface then
-				verticalVelocity = verticalVelocity - GRAVITY * dt
 				bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
-
 				if verticalVelocity < -JUMP_POWER * 2 then
 					jumpingFromSurface = false
 				end
 			else
-				verticalVelocity = verticalVelocity - GRAVITY * dt
 				bodyVel.Velocity = lateralVel + Vector3.new(0, verticalVelocity, 0)
-				surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), dt * 5)
+				surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), math.min(dt * 3, 1))
 			end
 		end
 
-		-- ============================
 		-- PULO
-		-- ============================
 		if wantsJump and isGrounded and canJump then
+			local isFloor = false
+			if hit then
+				isFloor = hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
+			end
+
 			if isFloor then
 				verticalVelocity = JUMP_POWER
 				isGrounded = false
@@ -533,19 +502,13 @@ local function ligar()
 				isGrounded = false
 				jumpingFromSurface = true
 			end
-
 			canJump = false
 			mobileControls.resetJump()
-			task.delay(0.3, function()
-				canJump = true
-			end)
+			task.delay(0.3, function() canJump = true end)
 		end
 
-		-- ============================
 		-- ANIMAÇÕES
-		-- ============================
 		local newAnim = "idle"
-
 		if not isGrounded then
 			if verticalVelocity > 5 then
 				newAnim = "jump"
@@ -554,24 +517,28 @@ local function ligar()
 			end
 		elseif isMoving then
 			newAnim = "walk"
-		else
-			newAnim = "idle"
 		end
 
 		if newAnim ~= currentAnim then
-			currentAnim = newAnim
 			tocarAnimacao(newAnim, 1)
 		end
 
-		-- Ajusta velocidade da animação de andar
-		if currentAnim == "walk" then
+		if currentAnim == "walk" and animTracks["walk"] and animTracks["walk"].IsPlaying then
 			local speed = lateralVel.Magnitude / WALK_SPEED
-			tocarAnimacao("walk", math.clamp(speed, 0.5, 2))
+			if speed < 0.3 then speed = 0.3 end
+			if speed > 1.5 then speed = 1.5 end
+			animTracks["walk"]:AdjustSpeed(speed)
 		end
 
-		-- ============================
-		-- ORIENTAÇÃO DO CORPO
-		-- ============================
+		animCheckTimer = animCheckTimer + dt
+		if animCheckTimer >= 0.3 then
+			animCheckTimer = 0
+			if animTracks[currentAnim] and not animTracks[currentAnim].IsPlaying then
+				tocarAnimacao(currentAnim, 1)
+			end
+		end
+
+		-- ORIENTAÇÃO
 		local upVec = surfaceNormal
 		local lookVec = currentForward
 
@@ -591,14 +558,15 @@ local function ligar()
 		lookVec = upVec:Cross(rightVec).Unit
 
 		local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
-		bodyGyro.CFrame = targetCF
 
-		-- ============================
-		-- CABEÇA OLHA PRA CÂMERA
-		-- ============================
-		atualizarCabeca(char, surfaceNormal)
+		local lerpRate = 6
+		if isMoving then lerpRate = 15 end
+		local lerpSpeed = dt * lerpRate
+		if lerpSpeed > 1 then lerpSpeed = 1 end
+		smoothGyroCF = smoothGyroCF:Lerp(targetCF, lerpSpeed)
+		bodyGyro.CFrame = smoothGyroCF
 
-		wasGrounded = isGrounded
+		atualizarCabeca(char)
 	end)
 end
 
@@ -606,19 +574,10 @@ end
 -- DESLIGAR
 -- ==============================
 local function desligar()
-	if loop then
-		loop:Disconnect()
-		loop = nil
-	end
+	if loop then loop:Disconnect(); loop = nil end
+	if mobileControls then mobileControls.destroy(); mobileControls = nil end
 
-	if mobileControls then
-		mobileControls.destroy()
-		mobileControls = nil
-	end
-
-	-- Para animações
-	pararTodasAnimacoes()
-	animTracks = {}
+	limparAnimacoes()
 
 	local char = player.Character
 	if char then
@@ -627,43 +586,46 @@ local function desligar()
 
 		if hum then
 			hum.PlatformStand = false
+			hum.WalkSpeed = savedWalkSpeed or 16
+			hum.JumpPower = savedJumpPower or 50
+			hum.JumpHeight = savedJumpHeight or 7.2
+			hum.AutoRotate = true
+			hum:ChangeState(Enum.HumanoidStateType.GettingUp)
 		end
 
-		-- Reativa script de animação
 		local animate = char:FindFirstChild("Animate")
-		if animate then
-			animate.Disabled = false
-		end
+		if animate then animate.Disabled = false end
 
-		-- Reseta o Neck
-		local function resetNeck(parent)
-			if not parent then return end
-			for _, obj in ipairs(parent:GetChildren()) do
-				if obj:IsA("Motor6D") and obj.Name == "Neck" then
-					-- Detecta R6
-					local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
-					if isR6 then
-						obj.C0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
-					else
-						obj.C0 = CFrame.new(0, 1, 0)
+		for _, partName in ipairs({"Head", "UpperTorso", "Torso"}) do
+			local part = char:FindFirstChild(partName)
+			if part then
+				for _, obj in ipairs(part:GetChildren()) do
+					if obj:IsA("Motor6D") and obj.Name == "Neck" then
+						local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
+						if isR6 then
+							obj.C0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+						else
+							obj.C0 = CFrame.new(0, 1, 0)
+						end
 					end
 				end
 			end
 		end
 
-		resetNeck(char:FindFirstChild("Head"))
-		resetNeck(char:FindFirstChild("UpperTorso"))
-		resetNeck(char:FindFirstChild("Torso"))
+		for _, obj in ipairs(char:GetChildren()) do
+			if obj:IsA("Animation") and obj.Name:find("Lagatixa_") then
+				obj:Destroy()
+			end
+		end
 
 		if hrp then
 			for _, obj in ipairs(hrp:GetChildren()) do
-				if obj:IsA("BodyVelocity") or obj:IsA("BodyGyro") then
+				if obj.Name == "LagatixaVel" or obj.Name == "LagatixaGyro" then
 					obj:Destroy()
 				end
 			end
-
-			hrp.AssemblyLinearVelocity = Vector3.zero
-			hrp.AssemblyAngularVelocity = Vector3.zero
+			hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+			hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 		end
 	end
 end
@@ -689,12 +651,13 @@ local function criarGUI()
 	frame.Active = true
 	frame.Draggable = true
 	frame.Parent = gui
+	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
 
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 40)
 	title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 	title.BorderSizePixel = 0
-	title.Text = "🦎 LAGATIXA v10"
+	title.Text = "LAGATIXA v14"
 	title.TextColor3 = Color3.fromRGB(0, 200, 255)
 	title.TextSize = 18
 	title.Font = Enum.Font.GothamBold
@@ -721,17 +684,14 @@ local function criarGUI()
 	btn.TextSize = 18
 	btn.Font = Enum.Font.GothamBold
 	btn.Parent = frame
-
-	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
 	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
 
 	btn.MouseButton1Click:Connect(function()
 		ativo = not ativo
-
 		if ativo then
 			btn.Text = "DESLIGAR"
 			btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-			status.Text = "ON ✓"
+			status.Text = "ON"
 			status.TextColor3 = Color3.fromRGB(100, 255, 100)
 			ligar()
 		else
@@ -744,9 +704,6 @@ local function criarGUI()
 	end)
 end
 
--- ==============================
--- INICIO
--- ==============================
 criarGUI()
 
 player.CharacterAdded:Connect(function()
@@ -757,4 +714,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA v10] Pronto! Setas + Animações + Cabeça livre")
+print("[LAGATIXA v14] Carregado com sucesso")
