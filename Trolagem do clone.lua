@@ -182,41 +182,14 @@ local function animarPersonagem(dt, isMoving, moveSpeed)
     local breathing = math.sin(tick() * 1.5) * 0.015
     local twitch = math.noise(tick() * 5, 0, 0) * 0.02 -- Micro-tremor aleatório
     
-    if not isMoving then
-        -- Pose Idle detalhada
-        for motorName, data in pairs(bodyMotors) do
-            local motor = data.motor
-            local originalC0 = data.originalC0
-            local targetOffset = CFrame.identity
-            
-            if motorName == "LeftShoulder" or motorName == "RightShoulder" then
-                local side = (motorName == "LeftShoulder" and -1 or 1)
-                targetOffset = CFrame.Angles(math.rad(5) + breathing, twitch, side * math.rad(15))
-            elseif motorName == "LeftWrist" or motorName == "RightWrist" then
-                -- Mãos levemente espalmadas
-                targetOffset = CFrame.Angles(0, 0, (motorName == "LeftWrist" and 1 or -1) * math.rad(10))
-            elseif motorName == "LeftHip" or motorName == "RightHip" then
-                local side = (motorName == "LeftHip" and -1 or 1)
-                targetOffset = CFrame.Angles(math.rad(-10) - breathing, -twitch, side * math.rad(10))
-            elseif motorName == "LeftAnkle" or motorName == "RightAnkle" then
-                -- Pés firmes no chão
-                targetOffset = CFrame.Angles(math.rad(15), 0, 0)
-            elseif motorName == "Root" then
-                targetOffset = CFrame.new(0, -0.15 + breathing, 0)
-            end
-            
-            motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, dt * 8)
-        end
-        return
-    end
-    
-    -- Animação de Andar Premium
-    local cycleSpeed = 12 + (moveSpeed * 6)
+    -- Atualiza o tempo da animação (sempre rodando para o rabo)
+    local cycleSpeed = isMoving and (12 + (moveSpeed * 6)) or 3
     animationTime = animationTime + dt * cycleSpeed
     
     local sin = math.sin(animationTime)
     local cos = math.cos(animationTime)
     
+    -- Configurações de amplitude
     local walkSwing = math.rad(30)
     local walkSplay = math.rad(18)
     local spineSway = math.rad(12)
@@ -227,47 +200,60 @@ local function animarPersonagem(dt, isMoving, moveSpeed)
         local originalC0 = data.originalC0
         local targetOffset = CFrame.identity
         
-        if motorName == "LeftShoulder" then
-            targetOffset = CFrame.Angles(sin * walkSwing, 0, -walkSplay - (cos * math.rad(10)))
-        elseif motorName == "RightShoulder" then
-            targetOffset = CFrame.Angles(-sin * walkSwing, 0, walkSplay + (cos * math.rad(10)))
-        elseif motorName == "LeftWrist" or motorName == "RightWrist" then
-            -- Punhos rotacionam ao tocar o chão
-            local side = (motorName == "LeftWrist" and 1 or -1)
-            local rot = (motorName == "LeftWrist" and sin or -sin)
-            targetOffset = CFrame.Angles(math.rad(10), rot * 0.2, side * math.rad(15))
-        elseif motorName == "LeftHip" then
-            targetOffset = CFrame.Angles(-sin * walkSwing, 0, -walkSplay + (cos * math.rad(10)))
-        elseif motorName == "RightHip" then
-            targetOffset = CFrame.Angles(sin * walkSwing, 0, walkSplay - (cos * math.rad(10)))
-        elseif motorName == "LeftAnkle" or motorName == "RightAnkle" then
-            -- Tornozelos acompanham a passada
-            local rot = (motorName == "LeftAnkle" and -sin or sin)
-            targetOffset = CFrame.Angles(rot * 0.4, 0, 0)
-            
-        elseif motorName == "LeftElbow" or motorName == "RightElbow" then
-            local phase = (motorName == "LeftElbow") and sin or -sin
-            local flexion = (phase > 0) and (phase * math.rad(35)) or 0
-            targetOffset = CFrame.Angles(-math.rad(20) - flexion, 0, 0)
-            
-        elseif motorName == "LeftKnee" or motorName == "RightKnee" then
-            local phase = (motorName == "LeftKnee") and -sin or sin
-            local flexion = (phase > 0) and (phase * math.rad(35)) or 0
-            targetOffset = CFrame.Angles(math.rad(20) + flexion, 0, 0)
-            
-        elseif motorName == "Root" then
-            local vBob = math.abs(cos) * bobAmount
-            targetOffset = CFrame.new(0, -0.1 + vBob, 0) * CFrame.Angles(0, cos * spineSway, 0)
-        elseif motorName == "Waist" then
-            targetOffset = CFrame.Angles(0, cos * (spineSway * 0.5), 0)
-        elseif motorName == "Neck" then
-            targetOffset = CFrame.Angles(0, -cos * (spineSway * 1.5), 0)
-        elseif motorName:find("TailSegMotor") then
-            -- ANIMAÇÃO PROCEDURAL DO RABO (Ondulação de onda senoidal)
+        if motorName:find("TailSegMotor") then
+            -- ANIMAÇÃO DO RABO (Sempre ativa)
             local segIndex = tonumber(motorName:match("%d+"))
-            local wave = math.sin(animationTime - (segIndex * 0.5))
-            local intensity = math.rad(15) + (moveSpeed * math.rad(10))
+            local wave = math.sin(animationTime - (segIndex * 0.6))
+            local intensity = isMoving and (math.rad(15) + (moveSpeed * math.rad(15))) or math.rad(8)
             targetOffset = CFrame.Angles(0, wave * intensity, 0)
+        elseif not isMoving then
+            -- Lógica IDLE para outros membros
+            if motorName == "LeftShoulder" or motorName == "RightShoulder" then
+                local side = (motorName == "LeftShoulder" and -1 or 1)
+                targetOffset = CFrame.Angles(math.rad(5) + breathing, twitch, side * math.rad(15))
+            elseif motorName == "LeftWrist" or motorName == "RightWrist" then
+                targetOffset = CFrame.Angles(0, 0, (motorName == "LeftWrist" and 1 or -1) * math.rad(10))
+            elseif motorName == "LeftHip" or motorName == "RightHip" then
+                local side = (motorName == "LeftHip" and -1 or 1)
+                targetOffset = CFrame.Angles(math.rad(-10) - breathing, -twitch, side * math.rad(10))
+            elseif motorName == "LeftAnkle" or motorName == "RightAnkle" then
+                targetOffset = CFrame.Angles(math.rad(15), 0, 0)
+            elseif motorName == "Root" then
+                targetOffset = CFrame.new(0, -0.15 + breathing, 0)
+            end
+        else
+            -- Lógica WALKING para outros membros
+            if motorName == "LeftShoulder" then
+                targetOffset = CFrame.Angles(sin * walkSwing, 0, -walkSplay - (cos * math.rad(10)))
+            elseif motorName == "RightShoulder" then
+                targetOffset = CFrame.Angles(-sin * walkSwing, 0, walkSplay + (cos * math.rad(10)))
+            elseif motorName == "LeftWrist" or motorName == "RightWrist" then
+                local side = (motorName == "LeftWrist" and 1 or -1)
+                local rot = (motorName == "LeftWrist" and sin or -sin)
+                targetOffset = CFrame.Angles(math.rad(10), rot * 0.2, side * math.rad(15))
+            elseif motorName == "LeftHip" then
+                targetOffset = CFrame.Angles(-sin * walkSwing, 0, -walkSplay + (cos * math.rad(10)))
+            elseif motorName == "RightHip" then
+                targetOffset = CFrame.Angles(sin * walkSwing, 0, walkSplay - (cos * math.rad(10)))
+            elseif motorName == "LeftAnkle" or motorName == "RightAnkle" then
+                local rot = (motorName == "LeftAnkle" and -sin or sin)
+                targetOffset = CFrame.Angles(rot * 0.4, 0, 0)
+            elseif motorName == "LeftElbow" or motorName == "RightElbow" then
+                local phase = (motorName == "LeftElbow") and sin or -sin
+                local flexion = (phase > 0) and (phase * math.rad(35)) or 0
+                targetOffset = CFrame.Angles(-math.rad(20) - flexion, 0, 0)
+            elseif motorName == "LeftKnee" or motorName == "RightKnee" then
+                local phase = (motorName == "LeftKnee") and -sin or sin
+                local flexion = (phase > 0) and (phase * math.rad(35)) or 0
+                targetOffset = CFrame.Angles(math.rad(20) + flexion, 0, 0)
+            elseif motorName == "Root" then
+                local vBob = math.abs(cos) * bobAmount
+                targetOffset = CFrame.new(0, -0.1 + vBob, 0) * CFrame.Angles(0, cos * spineSway, 0)
+            elseif motorName == "Waist" then
+                targetOffset = CFrame.Angles(0, cos * (spineSway * 0.5), 0)
+            elseif motorName == "Neck" then
+                targetOffset = CFrame.Angles(0, -cos * (spineSway * 1.5), 0)
+            end
         end
         
         motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, 0.35)
