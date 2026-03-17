@@ -21,6 +21,7 @@ local GRAV_ACCEL   = 80     -- aceleracao de gravidade em direcao a superficie
 local LAND_DIST    = 3.1    -- distancia do HRP ate a superficie quando "no chao"
 local RAY_DIST     = 9      -- alcance do raycast de deteccao
 local NORMAL_SPEED = 12     -- velocidade de suavizacao da normal (por segundo)
+local ANIM_ID      = "rbxassetid://180426354" -- ID da animação de andar (padrão ou custom)
 
 -- ==============================
 -- ESTADO
@@ -34,6 +35,7 @@ local myNormal    = Vector3.new(0, 1, 0)
 local myVelN      = 0       -- velocidade no eixo da normal (pulo/queda)
 local noChao      = false
 local pulando     = false
+local animTrack   = nil
 
 -- ==============================
 -- RAYCAST: encontra superficie mais proxima
@@ -83,8 +85,8 @@ end
 local function makeCF(pos, normal, camLook)
     local fwd = camLook - camLook:Dot(normal) * normal
     if fwd.Magnitude < 0.01 then
-        fwd = camera.CFrame.RightVector
-        fwd = fwd - fwd:Dot(normal) * normal
+        local camUp = camera.CFrame.UpVector
+        fwd = camUp - camUp:Dot(normal) * normal
     end
     if fwd.Magnitude < 0.01 then
         local arb = math.abs(normal.Y) < 0.9 and Vector3.new(0,1,0) or Vector3.new(1,0,0)
@@ -114,6 +116,13 @@ local function ligar()
     myVelN   = 0
     noChao   = false
     pulando  = false
+
+    -- Inicializa animação
+    if animTrack then animTrack:Stop() end
+    local anim = Instance.new("Animation")
+    anim.AnimationId = ANIM_ID
+    animTrack = hum:LoadAnimation(anim)
+    animTrack.Looped = true
 
     loop = RunService.Heartbeat:Connect(function(dt)
         if not ativo then return end
@@ -145,8 +154,13 @@ local function ligar()
 
         local camLook  = camera.CFrame.LookVector
         local camRight = camera.CFrame.RightVector
-        local fwd = camLook  - camLook:Dot(myNormal)  * camLook:Dot(myNormal)  * myNormal
-        fwd = camLook  - camLook:Dot(myNormal) * myNormal
+        
+        local fwd = camLook - camLook:Dot(myNormal) * myNormal
+        if fwd.Magnitude < 0.1 then
+            local camUp = camera.CFrame.UpVector
+            fwd = camUp - camUp:Dot(myNormal) * myNormal
+        end
+        
         local rgt = camRight - camRight:Dot(myNormal) * myNormal
         if fwd.Magnitude  > 0.01 then fwd = fwd.Unit  end
         if rgt.Magnitude  > 0.01 then rgt = rgt.Unit  end
@@ -156,6 +170,13 @@ local function ligar()
             local dir = fwd * (-mZ) + rgt * mX
             if dir.Magnitude > 0 then
                 velLateral = dir.Unit * WALK_SPEED
+                if animTrack and not animTrack.IsPlaying then
+                    animTrack:Play()
+                end
+            end
+        else
+            if animTrack and animTrack.IsPlaying then
+                animTrack:Stop()
             end
         end
 
@@ -229,6 +250,11 @@ local function desligar()
     noChao   = false
     myVelN   = 0
     myNormal = Vector3.new(0, 1, 0)
+
+    if animTrack then
+        animTrack:Stop()
+        animTrack = nil
+    end
 
     local char = player.Character
     if char then
