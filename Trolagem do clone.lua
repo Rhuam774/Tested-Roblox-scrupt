@@ -73,16 +73,22 @@ local bodyMotors = {}
 local animationTime = 0
 
 local function removerRabo(char)
-    for _, obj in ipairs(char:GetDescendants()) do
-        if (obj:IsA("Accessory") or obj:IsA("BasePart")) and (obj.Name:lower():find("tail") or obj.Name:lower():find("rabo")) then
-            if obj:IsA("Accessory") then
-                obj:Destroy()
-            else
-                obj.Transparency = 1
-                obj.CanCollide = false
+    task.spawn(function()
+        while ativo and char and char.Parent do
+            for _, obj in ipairs(char:GetDescendants()) do
+                if (obj:IsA("Accessory") or obj:IsA("BasePart")) and (obj.Name:lower():find("tail") or obj.Name:lower():find("rabo")) then
+                    if obj:IsA("BasePart") then
+                        obj.Transparency = 1
+                        obj.CanCollide = false
+                    elseif obj:IsA("Accessory") and obj:FindFirstChild("Handle") then
+                        obj.Handle.Transparency = 1
+                        obj.Handle.CanCollide = false
+                    end
+                end
             end
+            task.wait(2) -- Loop leve para garantir que o rabo não volte se o personagem mudar
         end
-    end
+    end)
 end
 
 local function encontrarMotors(char)
@@ -142,35 +148,34 @@ local function animarPersonagem(dt, isMoving, moveSpeed)
         return
     end
     
-    -- ANIMAÇÃO DE RASTEJAR PREMIUM (Sinuosidade Intensificada)
-    local speed = 12 + (moveSpeed * 6)
+    -- ANIMAÇÃO DE RASTEJAR ULTRA-VISÍVEL
+    local speed = 10 + (moveSpeed * 8)
     animationTime = animationTime + dt * speed
     
     local cycle = animationTime
-    local sway = math.sin(cycle) * 0.5 -- Balanço lateral do corpo
-    local verticalBob = math.abs(math.sin(cycle * 2)) * 0.15
+    local sway = math.sin(cycle) * 0.6 -- Balanço lateral forte
+    local verticalBob = math.abs(math.sin(cycle * 2)) * 0.2
     
     for name, data in pairs(bodyMotors) do
         local motor = data.motor
         local target = data.originalC0
         
-        -- Movimento de patas cruzadas (Diagonal) com amplitude aumentada
+        -- Amplitude exagerada para ser vista de longe
         if name == "LeftShoulder" or name == "RightHip" then
-            local move = math.sin(cycle) * 1.2
-            local lift = math.max(0, math.cos(cycle)) * 0.7
-            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.6, 0, 0)
+            local move = math.sin(cycle) * 1.5
+            local lift = math.max(0, math.cos(cycle)) * 0.8
+            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.8, 0, 0)
         elseif name == "RightShoulder" or name == "LeftHip" then
-            local move = math.sin(cycle + math.pi) * 1.2
-            local lift = math.max(0, math.cos(cycle + math.pi)) * 0.7
-            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.6, 0, 0)
+            local move = math.sin(cycle + math.pi) * 1.5
+            local lift = math.max(0, math.cos(cycle + math.pi)) * 0.8
+            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.8, 0, 0)
         elseif name == "Root" or name == "Waist" then
-            -- Sinuosidade da coluna
-            target = target * CFrame.new(sway * 0.4, -0.2 + verticalBob, 0) * CFrame.Angles(0, -sway, 0)
+            target = target * CFrame.new(sway * 0.5, -0.25 + verticalBob, 0) * CFrame.Angles(0, -sway, 0)
         elseif name == "Neck" then
-            target = target * CFrame.Angles(0, sway * 1.5, 0)
+            target = target * CFrame.Angles(0, sway * 1.8, 0)
         end
         
-        motor.C0 = motor.C0:Lerp(target, math.clamp(dt * 15, 0, 1))
+        motor.C0 = motor.C0:Lerp(target, math.clamp(dt * 12, 0, 1))
     end
 end
 
@@ -428,17 +433,18 @@ local function ligar()
     encontrarMotors(char)
     
     hum.PlatformStand = true
+    hum.AutoRotate = false -- CRÍTICO: Para os outros verem sua rotação correta
     hrp.Anchored = false
 
     local bodyVel = Instance.new("BodyVelocity")
-    bodyVel.MaxForce = Vector3.new(4e4, 4e4, 4e4)
+    bodyVel.MaxForce = Vector3.new(1, 1, 1) * 1e8 -- Força bruta para replicação
     bodyVel.Velocity = Vector3.zero
     bodyVel.Parent = hrp
 
     local bodyGyro = Instance.new("BodyGyro")
-    bodyGyro.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
-    bodyGyro.P = 3000
-    bodyGyro.D = 500
+    bodyGyro.MaxTorque = Vector3.new(1, 1, 1) * 1e8 -- Força bruta para replicação
+    bodyGyro.P = 10000
+    bodyGyro.D = 800
     bodyGyro.CFrame = hrp.CFrame
     bodyGyro.Parent = hrp
 
@@ -465,14 +471,17 @@ local function ligar()
         local mz = mobileControls.getMoveZ()
         local wantsJump = mobileControls.getJump()
 
-        -- Determina se está se movendo (Input ou Velocidade Real)
-        local moveDir = Vector3.new(mx, 0, mz)
-        local velocity = hrp.AssemblyLinearVelocity.Magnitude
-        local isMoving = moveDir.Magnitude > 0.1 or velocity > 1
+        -- Determina se está se movendo (Prioridade para MoveDirection - Mobile/PC)
+        local inputMove = Vector3.new(mx, 0, mz)
+        local realMove = hum.MoveDirection
+        local isMoving = inputMove.Magnitude > 0.1 or realMove.Magnitude > 0.1
         
         -- Atualiza estado da animação
         animState.isMoving = isMoving
-        animState.moveSpeed = math.max(math.min(moveDir.Magnitude, 1), math.min(velocity/WALK_SPEED, 1))
+        animState.moveSpeed = math.max(inputMove.Magnitude, realMove.Magnitude)
+        
+        -- Força o estado Physics para replicação de orientação
+        hum:ChangeState(Enum.HumanoidStateType.Physics)
         
         -- Anima o personagem apenas quando estiver se movendo
         if isMoving then
