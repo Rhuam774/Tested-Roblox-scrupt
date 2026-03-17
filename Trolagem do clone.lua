@@ -1,7 +1,7 @@
 -- =============================================================
---  MODO LAGATIXA  v5  -  Delta Executor
+--  MODO LAGATIXA  v6  -  Delta Executor (CORRIGIDO)
 --  Controlador de personagem proprio: sem BodyGyro, sem BodyVelocity.
---  Define CFrame direto a cada frame. Funciona 100%.
+--  Define CFrame direto a cada frame.
 -- =============================================================
 
 local Players          = game:GetService("Players")
@@ -15,42 +15,37 @@ local camera = workspace.CurrentCamera
 -- ==============================
 -- CONSTANTES
 -- ==============================
-local WALK_SPEED   = 16     -- velocidade de caminhada (studs/s)
-local JUMP_POWER   = 55     -- impulso do pulo (studs/s na direcao da normal)
-local GRAV_ACCEL   = 80     -- aceleracao de gravidade em direcao a superficie
-local LAND_DIST    = 3.1    -- distancia do HRP ate a superficie quando "no chao"
-local RAY_DIST     = 9      -- alcance do raycast de deteccao
-local NORMAL_SPEED = 12     -- velocidade de suavizacao da normal (por segundo)
-local ANIM_ID      = "rbxassetid://180426354" -- ID da animação de andar (padrão ou custom)
+local WALK_SPEED   = 16
+local JUMP_POWER   = 55
+local GRAV_ACCEL   = 80
+local LAND_DIST    = 3.1
+local RAY_DIST     = 9
+local NORMAL_SPEED = 12
+local ANIM_ID      = "rbxassetid://180426354"
 
 -- ==============================
 -- ESTADO
 -- ==============================
 local ativo    = false
-local loop     = nil   -- conexao do Heartbeat
+local loop     = nil
 
--- Estado do controlador (redefinido ao ativar)
 local myPos       = Vector3.zero
 local myNormal    = Vector3.new(0, 1, 0)
-local myVelN      = 0       -- velocidade no eixo da normal (pulo/queda)
+local myVelN      = 0
 local noChao      = false
 local pulando     = false
 local animTrack   = nil
 
 -- ==============================
--- RAYCAST: encontra superficie mais proxima
--- Verifica direcao da normal atual E as 5 outras faces locais
+-- RAYCAST
 -- ==============================
 local function detectar(pos, cf, normal, char)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { char }
 
-    -- local pos = hrp.Position -- Removido: agora recebemos a posicao alvo
-    -- Prioriza a direcao "baixo" local (normal invertida), depois as outras 5
-    -- local cf = hrp.CFrame -- Removido: agora recebemos o CFrame
     local dirs = {
-        -normal,           -- principal: direcao atual da gravidade
+        -normal,
         -cf.UpVector,
          cf.UpVector,
          cf.LookVector,
@@ -79,8 +74,7 @@ local function detectar(pos, cf, normal, char)
 end
 
 -- ==============================
--- CFrame final: personagem 100% em pe na superficie
--- up = normal, look = camera projetada no plano
+-- CFrame final
 -- ==============================
 local function makeCF(pos, normal, camLook)
     local fwd = camLook - camLook:Dot(normal) * normal
@@ -107,22 +101,34 @@ local function ligar()
     local hum  = char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
 
-    -- Para a fisica do Humanoid para ele nao brigar com nossa posicao
+    -- Desativa a fisica do Humanoid
     hum.PlatformStand = true
 
-    -- Estado inicial
+    -- Estado inicial: pega posicao ATUAL do personagem
     myPos    = hrp.Position
     myNormal = Vector3.new(0, 1, 0)
     myVelN   = 0
     noChao   = false
     pulando  = false
 
-    -- Inicializa animação
-    if animTrack then animTrack:Stop() end
-    local anim = Instance.new("Animation")
-    anim.AnimationId = ANIM_ID
-    animTrack = hum:LoadAnimation(anim)
-    animTrack.Looped = true
+    -- Ancora o HRP para a engine nao mover ele por conta propria
+    hrp.Anchored = true
+
+    -- Animacao
+    if animTrack then
+        animTrack:Stop()
+        animTrack = nil
+    end
+
+    local ok, track = pcall(function()
+        local anim = Instance.new("Animation")
+        anim.AnimationId = ANIM_ID
+        return hum:LoadAnimation(anim)
+    end)
+    if ok and track then
+        animTrack = track
+        animTrack.Looped = true
+    end
 
     loop = RunService.Heartbeat:Connect(function(dt)
         if not ativo then return end
@@ -130,52 +136,56 @@ local function ligar()
         local c = player.Character
         if not c then return end
         local h = c:FindFirstChild("HumanoidRootPart")
-        local u = u or c:FindFirstChildOfClass("Humanoid")
-        if not h or not u then return end
+        local hum2 = c:FindFirstChildOfClass("Humanoid")
+        if not h or not hum2 then return end
 
-        -- Sincroniza myPos com a posicao real do HRP para evitar drift/travamento
-        myPos = h.Position
+        -- Garante que continua ancorado
+        if not h.Anchored then
+            h.Anchored = true
+        end
 
+        -- ========== INPUT ==========
         local mX, mZ = 0, 0
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then mZ = -1 end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then mZ =  1 end
         if UserInputService:IsKeyDown(Enum.KeyCode.A) then mX = -1 end
         if UserInputService:IsKeyDown(Enum.KeyCode.D) then mX =  1 end
 
+        -- ========== DIRECOES PROJETADAS NA SUPERFICIE ==========
         local camLook  = camera.CFrame.LookVector
         local camRight = camera.CFrame.RightVector
-        
+
         local fwd = camLook - camLook:Dot(myNormal) * myNormal
-        if fwd.Magnitude < 0.1 then
+        if fwd.Magnitude < 0.01 then
             local camUp = camera.CFrame.UpVector
             fwd = camUp - camUp:Dot(myNormal) * myNormal
         end
-        
-        local rgt = camRight - camRight:Dot(myNormal) * myNormal
-        if fwd.Magnitude  > 0.01 then fwd = fwd.Unit  end
-        if rgt.Magnitude  > 0.01 then rgt = rgt.Unit  end
+        if fwd.Magnitude > 0.01 then fwd = fwd.Unit else fwd = Vector3.zero end
 
+        local rgt = camRight - camRight:Dot(myNormal) * myNormal
+        if rgt.Magnitude > 0.01 then rgt = rgt.Unit else rgt = Vector3.zero end
+
+        -- ========== VELOCIDADE LATERAL ==========
         local velLateral = Vector3.zero
+        local andando = false
         if mX ~= 0 or mZ ~= 0 then
-            -- Note: -mZ para W ser frente (mZ = -1 -> -(-1) = 1)
-            -- Mas no Roblox o LookVector jah aponta para frente.
-            -- Vamos garantir que a direcao seja consistente.
             local dir = fwd * (-mZ) + rgt * mX
-            if dir.Magnitude > 0 then
+            if dir.Magnitude > 0.01 then
                 velLateral = dir.Unit * WALK_SPEED
-                if animTrack and not animTrack.IsPlaying then
-                    animTrack:Play()
-                end
+                andando = true
             end
-        else
-            if animTrack and animTrack.IsPlaying then
+        end
+
+        -- Animacao de andar
+        if animTrack then
+            if andando and not animTrack.IsPlaying then
+                animTrack:Play()
+            elseif not andando and animTrack.IsPlaying then
                 animTrack:Stop()
             end
         end
 
-        -- --------------------------------------------------
-        -- 4. PULO
-        -- --------------------------------------------------
+        -- ========== PULO ==========
         if UserInputService:IsKeyDown(Enum.KeyCode.Space) and noChao and not pulando then
             myVelN  = JUMP_POWER
             noChao  = false
@@ -183,34 +193,40 @@ local function ligar()
             task.delay(0.55, function() pulando = false end)
         end
 
-        -- --------------------------------------------------
-        -- 2. CALCULA MOVIMENTO E GRAVIDADE (Para onde queremos ir?)
-        -- --------------------------------------------------
+        -- ========== GRAVIDADE + MOVIMENTO ==========
         myVelN = myVelN - GRAV_ACCEL * dt
-        myPos = myPos + myNormal * myVelN * dt + velLateral * dt
 
-        -- --------------------------------------------------
-        -- 3. DETECTA SUPERFICIE NO DESTINO (O que tem la?)
-        -- --------------------------------------------------
-        local norm, dist, pt = detectar(myPos, h.CFrame, myNormal, c)
+        -- Calcula nova posicao DESEJADA
+        local novaPosDesejada = myPos + myNormal * myVelN * dt + velLateral * dt
+
+        -- ========== DETECTA SUPERFICIE ==========
+        -- Usa o CFrame atual para as direcoes de raio
+        local cfAtual = makeCF(myPos, myNormal, camLook)
+        local norm, dist, pt = detectar(novaPosDesejada, cfAtual, myNormal, c)
 
         if norm then
-            -- Suaviza normal APENAS quando proximo da superficie
+            -- Suaviza normal quando proximo
             if dist < RAY_DIST * 0.8 then
                 myNormal = myNormal:Lerp(norm, math.min(dt * NORMAL_SPEED, 1))
-                if myNormal.Magnitude > 0 then
+                if myNormal.Magnitude > 0.001 then
                     myNormal = myNormal.Unit
+                else
+                    myNormal = Vector3.new(0, 1, 0)
                 end
             end
 
             if dist <= LAND_DIST and myVelN <= 0 then
-                -- Aterrisou: para queda, posiciona exatamente acima da superficie
+                -- Aterrisou
                 myVelN = 0
                 noChao = true
-                myPos  = pt + norm * LAND_DIST
-                -- Atualiza normal imediatamente ao aterrissar
+                -- Posiciona exatamente na superficie
+                novaPosDesejada = pt + norm * LAND_DIST
                 myNormal = myNormal:Lerp(norm, 0.4)
-                if myNormal.Magnitude > 0 then myNormal = myNormal.Unit end
+                if myNormal.Magnitude > 0.001 then
+                    myNormal = myNormal.Unit
+                else
+                    myNormal = Vector3.new(0, 1, 0)
+                end
             else
                 noChao = false
             end
@@ -218,14 +234,11 @@ local function ligar()
             noChao = false
         end
 
-        -- --------------------------------------------------
-        -- 7. APLICA POSICAO E ROTACAO DIRETO NO HRP
-        -- --------------------------------------------------
-        local cf = makeCF(myPos, myNormal, camera.CFrame.LookVector)
+        -- ========== APLICA POSICAO ==========
+        myPos = novaPosDesejada
+
+        local cf = makeCF(myPos, myNormal, camLook)
         h.CFrame = cf
-        -- Zera velocidade fisica para o motor do Roblox nao interferir
-        h.AssemblyLinearVelocity  = Vector3.zero
-        h.AssemblyAngularVelocity = Vector3.zero
     end)
 end
 
@@ -254,6 +267,7 @@ local function desligar()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if hum then hum.PlatformStand = false end
         if hrp then
+            hrp.Anchored = false  -- IMPORTANTE: desancora ao desativar
             hrp.AssemblyLinearVelocity  = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
             hrp.CFrame = CFrame.new(hrp.Position)
@@ -377,4 +391,4 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
-print("[Lagatixa v5] Pronto!")
+print("[Lagatixa v6] Pronto!")
