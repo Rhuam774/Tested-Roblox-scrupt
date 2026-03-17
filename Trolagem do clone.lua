@@ -322,6 +322,8 @@ local function soltarRabo()
         end
     end)
 end
+
+local function atualizarCabeca(char, surfaceNormal)
     local neck = nil
     
     -- No R15, o Neck costuma ser filho do UpperTorso
