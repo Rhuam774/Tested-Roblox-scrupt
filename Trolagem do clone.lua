@@ -1,6 +1,5 @@
-
 -- =============================================================
---  MODO LAGATIXA  v9  -  VERSÃO MOBILE COM SETAS
+--  MODO LAGATIXA  v10  -  VERSÃO MOBILE COMPLETA
 -- =============================================================
 
 local Players          = game:GetService("Players")
@@ -24,6 +23,7 @@ local STICK_DIST   = 3
 local ativo = false
 local loop = nil
 local mobileControls = nil
+local animTracks = {}
 
 -- ==============================
 -- RAYCAST SIMPLES
@@ -60,6 +60,67 @@ local function raycastChao(pos, char)
 end
 
 -- ==============================
+-- SISTEMA DE ANIMAÇÕES
+-- ==============================
+local function pararTodasAnimacoes()
+	for nome, track in pairs(animTracks) do
+		if track and track.IsPlaying then
+			track:Stop(0.2)
+		end
+	end
+end
+
+local function carregarAnimacoes(char)
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+
+	animTracks = {}
+
+	-- IDs de animação padrão do Roblox (R15)
+	local anims = {
+		idle = "rbxassetid://180435571",
+		walk = "rbxassetid://180426354",
+		jump = "rbxassetid://125750702",
+		fall = "rbxassetid://180436148",
+	}
+
+	for nome, id in pairs(anims) do
+		local ok, err = pcall(function()
+			local animObj = Instance.new("Animation")
+			animObj.AnimationId = id
+			local track = hum:LoadAnimation(animObj)
+			animTracks[nome] = track
+			animObj:Destroy()
+		end)
+		if not ok then
+			warn("[LAGATIXA] Erro ao carregar animação " .. nome .. ": " .. tostring(err))
+		end
+	end
+end
+
+local function tocarAnimacao(nome, velocidade)
+	velocidade = velocidade or 1
+
+	local track = animTracks[nome]
+	if not track then return end
+
+	if track.IsPlaying then
+		track:AdjustSpeed(velocidade)
+		return
+	end
+
+	-- Para outras animações
+	for n, t in pairs(animTracks) do
+		if n ~= nome and t and t.IsPlaying then
+			t:Stop(0.2)
+		end
+	end
+
+	track:Play(0.2)
+	track:AdjustSpeed(velocidade)
+end
+
+-- ==============================
 -- CONTROLES MOBILE COM SETAS
 -- ==============================
 local function criarControlesMobile()
@@ -72,14 +133,10 @@ local function criarControlesMobile()
 	controls.BackgroundTransparency = 1
 	controls.Parent = gui
 
-	-- Estado do input
 	local moveX = 0
 	local moveZ = 0
 	local wantsJump = false
 
-	-- ============================
-	-- FUNÇÃO PARA CRIAR BOTÃO SETA
-	-- ============================
 	local function criarSeta(nome, texto, posX, posY, parentFrame)
 		local btn = Instance.new("TextButton")
 		btn.Name = nome
@@ -106,9 +163,7 @@ local function criarControlesMobile()
 		return btn
 	end
 
-	-- ============================
-	-- CONTAINER DAS SETAS (ESQUERDA)
-	-- ============================
+	-- D-PAD
 	local dpadFrame = Instance.new("Frame")
 	dpadFrame.Name = "DPad"
 	dpadFrame.Size = UDim2.new(0, 205, 0, 205)
@@ -116,16 +171,11 @@ local function criarControlesMobile()
 	dpadFrame.BackgroundTransparency = 1
 	dpadFrame.Parent = controls
 
-	--         [CIMA]
-	--  [ESQ] [     ] [DIR]
-	--        [BAIXO]
-
 	local btnCima   = criarSeta("Cima",   "▲", 70, 0,   dpadFrame)
 	local btnBaixo  = criarSeta("Baixo",  "▼", 70, 140, dpadFrame)
 	local btnEsq    = criarSeta("Esq",    "◀", 0,  70,  dpadFrame)
 	local btnDir    = criarSeta("Dir",     "▶", 140, 70, dpadFrame)
 
-	-- Centro decorativo
 	local centro = Instance.new("Frame")
 	centro.Size = UDim2.new(0, 55, 0, 55)
 	centro.Position = UDim2.new(0, 75, 0, 75)
@@ -135,9 +185,7 @@ local function criarControlesMobile()
 	centro.Parent = dpadFrame
 	Instance.new("UICorner", centro).CornerRadius = UDim.new(0, 10)
 
-	-- ============================
-	-- BOTÃO DE PULO (DIREITA)
-	-- ============================
+	-- BOTÃO PULO
 	local jumpBtn = Instance.new("TextButton")
 	jumpBtn.Name = "JumpBtn"
 	jumpBtn.Size = UDim2.new(0, 90, 0, 90)
@@ -152,9 +200,7 @@ local function criarControlesMobile()
 	jumpBtn.AutoButtonColor = false
 	jumpBtn.Parent = controls
 
-	local jumpCorner = Instance.new("UICorner", jumpBtn)
-	jumpCorner.CornerRadius = UDim.new(1, 0)
-
+	Instance.new("UICorner", jumpBtn).CornerRadius = UDim.new(1, 0)
 	local jumpStroke = Instance.new("UIStroke", jumpBtn)
 	jumpStroke.Color = Color3.fromRGB(0, 255, 150)
 	jumpStroke.Thickness = 3
@@ -169,15 +215,8 @@ local function criarControlesMobile()
 	jumpLabel.Font = Enum.Font.GothamBold
 	jumpLabel.Parent = jumpBtn
 
-	-- ============================
 	-- ESTADO DAS SETAS
-	-- ============================
-	local pressing = {
-		Cima = false,
-		Baixo = false,
-		Esq = false,
-		Dir = false,
-	}
+	local pressing = { Cima = false, Baixo = false, Esq = false, Dir = false }
 
 	local function atualizarMove()
 		moveZ = 0
@@ -200,7 +239,6 @@ local function criarControlesMobile()
 				atualizarMove()
 			end
 		end)
-
 		btn.InputEnded:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 				pressing[nome] = false
@@ -216,7 +254,6 @@ local function criarControlesMobile()
 	conectarSeta(btnEsq,   "Esq")
 	conectarSeta(btnDir,    "Dir")
 
-	-- Eventos do Botão de Pulo
 	jumpBtn.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			wantsJump = true
@@ -224,7 +261,6 @@ local function criarControlesMobile()
 			jumpBtn.BackgroundTransparency = 0.1
 		end
 	end)
-
 	jumpBtn.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			wantsJump = false
@@ -243,6 +279,85 @@ local function criarControlesMobile()
 end
 
 -- ==============================
+-- CABEÇA OLHA PRA CÂMERA
+-- ==============================
+local function atualizarCabeca(char, surfaceNormal)
+	local neck = nil
+
+	-- Procura o Motor6D do pescoço
+	local head = char:FindFirstChild("Head")
+	if head then
+		for _, obj in ipairs(head:GetChildren()) do
+			if obj:IsA("Motor6D") and obj.Name == "Neck" then
+				neck = obj
+				break
+			end
+		end
+	end
+
+	if not neck then
+		-- Tenta achar no UpperTorso (R15)
+		local upperTorso = char:FindFirstChild("UpperTorso")
+		if upperTorso then
+			for _, obj in ipairs(upperTorso:GetChildren()) do
+				if obj:IsA("Motor6D") and obj.Name == "Neck" then
+					neck = obj
+					break
+				end
+			end
+		end
+	end
+
+	if not neck then
+		-- Tenta no Torso (R6)
+		local torso = char:FindFirstChild("Torso")
+		if torso then
+			for _, obj in ipairs(torso:GetChildren()) do
+				if obj:IsA("Motor6D") and obj.Name == "Neck" then
+					neck = obj
+					break
+				end
+			end
+		end
+	end
+
+	if not neck then return end
+
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	-- Direção da câmera relativa ao corpo
+	local camLook = camera.CFrame.LookVector
+
+	-- Converte para espaço local do torso
+	local torsoParent = neck.Part0
+	if not torsoParent then return end
+
+	local torsoCF = torsoParent.CFrame
+	local localLook = torsoCF:VectorToObjectSpace(camLook)
+
+	-- Calcula ângulos
+	local yaw = math.atan2(-localLook.X, -localLook.Z)
+	local pitch = math.asin(math.clamp(localLook.Y, -1, 1))
+
+	-- Limita os ângulos para não parecer estranho
+	yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
+	pitch = math.clamp(pitch, -math.rad(60), math.rad(60))
+
+	-- Aplica no C0 do Neck (preservando a posição original)
+	local originalC0 = CFrame.new(0, 1, 0) -- Posição padrão R15
+	
+	-- Detecta se é R6
+	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
+	if isR6 then
+		originalC0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+	end
+
+	local rotacao = CFrame.Angles(pitch, yaw, 0)
+	neck.C0 = originalC0 * rotacao
+end
+
+-- ==============================
 -- LIGAR
 -- ==============================
 local function ligar()
@@ -253,6 +368,20 @@ local function ligar()
 	local hum = char:FindFirstChildOfClass("Humanoid")
 
 	if not hrp or not hum then return end
+
+	-- Para animações padrão do Roblox
+	local animate = char:FindFirstChild("Animate")
+	if animate then
+		animate.Disabled = true
+	end
+
+	-- Para todas as animações atuais
+	for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
+		track:Stop(0)
+	end
+
+	-- Carrega nossas animações
+	carregarAnimacoes(char)
 
 	hum.PlatformStand = true
 	hrp.Anchored = false
@@ -279,15 +408,13 @@ local function ligar()
 	local verticalVelocity = 0
 	local isGrounded = false
 	local canJump = true
-
-	-- Direção do "forward" do personagem (na superfície)
 	local currentForward = Vector3.new(0, 0, -1)
-
-	-- Estado do pulo na superfície (parede/teto)
-	-- Quando pula, salta na direção da cabeça (surfaceNormal) e
-	-- depois a gravidade puxa de volta para a superfície
 	local jumpingFromSurface = false
 	local jumpSurfaceNormal = Vector3.new(0, 1, 0)
+
+	-- Estado da animação
+	local currentAnim = "idle"
+	local wasGrounded = true
 
 	loop = RunService.Heartbeat:Connect(function(dt)
 		if not ativo then return end
@@ -318,22 +445,31 @@ local function ligar()
 			right = Vector3.new(1, 0, 0)
 		end
 
-		-- Guarda forward atual
 		local moveDir = forward * mz + right * mx
-		if moveDir.Magnitude > 0.1 then
+		local isMoving = moveDir.Magnitude > 0.1
+
+		if isMoving then
 			currentForward = moveDir.Unit
+		else
+			-- QUANDO PARADO: corpo olha na direção da câmera (projetada na superfície)
+			local camForward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
+			if camForward.Magnitude > 0.01 then
+				currentForward = currentForward:Lerp(camForward.Unit, dt * 5)
+				if currentForward.Magnitude > 0 then
+					currentForward = currentForward.Unit
+				end
+			end
 		end
 
 		-- MOVIMENTO LATERAL
 		local lateralVel = Vector3.zero
-		if moveDir.Magnitude > 0.1 then
+		if isMoving then
 			lateralVel = moveDir.Unit * WALK_SPEED
 		end
 
 		-- DETECÇÃO DE SUPERFÍCIE
 		local hit, dist = raycastChao(hrp.Position, char)
 
-		-- Verifica se está no chão normal (normal apontando pra cima)
 		local isFloor = false
 		if hit then
 			isFloor = hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
@@ -358,8 +494,6 @@ local function ligar()
 				isGrounded = false
 
 				if jumpingFromSurface then
-					-- Gravidade puxa de volta para a superfície de onde pulou
-					-- A "gravidade" age na direção OPOSTA à normal da superfície
 					verticalVelocity = verticalVelocity - GRAVITY * dt
 					bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
 				else
@@ -371,11 +505,9 @@ local function ligar()
 			isGrounded = false
 
 			if jumpingFromSurface then
-				-- Continua com gravidade relativa à superfície
 				verticalVelocity = verticalVelocity - GRAVITY * dt
 				bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
 
-				-- Se já caiu demais sem achar superfície, volta ao normal
 				if verticalVelocity < -JUMP_POWER * 2 then
 					jumpingFromSurface = false
 				end
@@ -391,13 +523,10 @@ local function ligar()
 		-- ============================
 		if wantsJump and isGrounded and canJump then
 			if isFloor then
-				-- CHÃO NORMAL: pulo normal pra cima
 				verticalVelocity = JUMP_POWER
 				isGrounded = false
 				jumpingFromSurface = false
 			else
-				-- PAREDE OU TETO: salta na direção da cabeça (surfaceNormal)
-				-- e depois cai de volta na superfície
 				jumpSurfaceNormal = surfaceNormal
 				verticalVelocity = JUMP_POWER
 				isGrounded = false
@@ -406,17 +535,45 @@ local function ligar()
 
 			canJump = false
 			mobileControls.resetJump()
-
 			task.delay(0.3, function()
 				canJump = true
 			end)
 		end
 
-		-- ORIENTAÇÃO
+		-- ============================
+		-- ANIMAÇÕES
+		-- ============================
+		local newAnim = "idle"
+
+		if not isGrounded then
+			if verticalVelocity > 5 then
+				newAnim = "jump"
+			else
+				newAnim = "fall"
+			end
+		elseif isMoving then
+			newAnim = "walk"
+		else
+			newAnim = "idle"
+		end
+
+		if newAnim ~= currentAnim then
+			currentAnim = newAnim
+			tocarAnimacao(newAnim, 1)
+		end
+
+		-- Ajusta velocidade da animação de andar
+		if currentAnim == "walk" then
+			local speed = lateralVel.Magnitude / WALK_SPEED
+			tocarAnimacao("walk", math.clamp(speed, 0.5, 2))
+		end
+
+		-- ============================
+		-- ORIENTAÇÃO DO CORPO
+		-- ============================
 		local upVec = surfaceNormal
 		local lookVec = currentForward
 
-		-- Garante que lookVec seja perpendicular ao upVec
 		lookVec = (lookVec - lookVec:Dot(upVec) * upVec)
 		if lookVec.Magnitude > 0.01 then
 			lookVec = lookVec.Unit
@@ -434,6 +591,13 @@ local function ligar()
 
 		local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
 		bodyGyro.CFrame = targetCF
+
+		-- ============================
+		-- CABEÇA OLHA PRA CÂMERA
+		-- ============================
+		atualizarCabeca(char, surfaceNormal)
+
+		wasGrounded = isGrounded
 	end)
 end
 
@@ -451,6 +615,10 @@ local function desligar()
 		mobileControls = nil
 	end
 
+	-- Para animações
+	pararTodasAnimacoes()
+	animTracks = {}
+
 	local char = player.Character
 	if char then
 		local hum = char:FindFirstChildOfClass("Humanoid")
@@ -459,6 +627,32 @@ local function desligar()
 		if hum then
 			hum.PlatformStand = false
 		end
+
+		-- Reativa script de animação
+		local animate = char:FindFirstChild("Animate")
+		if animate then
+			animate.Disabled = false
+		end
+
+		-- Reseta o Neck
+		local function resetNeck(parent)
+			if not parent then return end
+			for _, obj in ipairs(parent:GetChildren()) do
+				if obj:IsA("Motor6D") and obj.Name == "Neck" then
+					-- Detecta R6
+					local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
+					if isR6 then
+						obj.C0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+					else
+						obj.C0 = CFrame.new(0, 1, 0)
+					end
+				end
+			end
+		end
+
+		resetNeck(char:FindFirstChild("Head"))
+		resetNeck(char:FindFirstChild("UpperTorso"))
+		resetNeck(char:FindFirstChild("Torso"))
 
 		if hrp then
 			for _, obj in ipairs(hrp:GetChildren()) do
@@ -499,7 +693,7 @@ local function criarGUI()
 	title.Size = UDim2.new(1, 0, 0, 40)
 	title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 	title.BorderSizePixel = 0
-	title.Text = "🦎 LAGATIXA MOBILE"
+	title.Text = "🦎 LAGATIXA v10"
 	title.TextColor3 = Color3.fromRGB(0, 200, 255)
 	title.TextSize = 18
 	title.Font = Enum.Font.GothamBold
@@ -562,4 +756,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA MOBILE v9] Pronto! Setas + Pulo Inteligente")
+print("[LAGATIXA v10] Pronto! Setas + Animações + Cabeça livre")
