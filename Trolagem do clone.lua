@@ -117,6 +117,12 @@ end
 -- GERADOR DE RABO (TRANSFORMA CABELO)
 -- ==============================
 local function criarRabo(char)
+    -- Limpa rabo anterior se existir
+    for _, obj in ipairs(animState.tailSegments) do
+        if obj then obj:Destroy() end
+    end
+    animState.tailSegments = {}
+
     local corRabo = Color3.fromRGB(50, 70, 50) -- Cor padrão (verde escuro)
     
     -- Tenta pegar a cor do cabelo para o rabo
@@ -124,7 +130,6 @@ local function criarRabo(char)
         if acc:IsA("Accessory") then
             local handle = acc:FindFirstChild("Handle")
             if handle and (acc.Name:lower():find("hair") or handle:FindFirstChildOfClass("SpecialMesh")) then
-                -- Se achou o cabelo, pega a cor e esconde o cabelo original
                 corRabo = handle.Color
                 handle.Transparency = 1 
             end
@@ -135,11 +140,11 @@ local function criarRabo(char)
     if not parent then return end
 
     local lastPart = parent
-    local segments = 5
+    local segments = 6 -- Um pouco mais longo
     local config = {
-        sizeStart = 0.8,
-        sizeEnd = 0.2,
-        length = 0.6
+        sizeStart = 0.7,
+        sizeEnd = 0.15,
+        length = 0.5
     }
 
     for i = 1, segments do
@@ -157,16 +162,15 @@ local function criarRabo(char)
         seg.Parent = char
         
         local mesh = Instance.new("SpecialMesh", seg)
-        mesh.MeshType = Enum.MeshType.Sphere -- Rabo mais arredondado
+        mesh.MeshType = Enum.MeshType.Sphere 
         
         local motor = Instance.new("Motor6D")
         motor.Name = "TailSegMotor" .. i
         motor.Part0 = lastPart
         motor.Part1 = seg
         
-        -- Posição do Motor
         if i == 1 then
-            motor.C0 = CFrame.new(0, -0.2, 0.5) * CFrame.Angles(math.rad(-20), 0, 0)
+            motor.C0 = CFrame.new(0, -0.2, 0.5) * CFrame.Angles(math.rad(-15), 0, 0)
         else
             motor.C0 = CFrame.new(0, 0, config.length * 0.8)
         end
@@ -256,6 +260,7 @@ local function animarPersonagem(dt, isMoving, moveSpeed)
             end
         end
         
+        -- Garante que o motor seja atualizado com lerp
         motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, 0.35)
     end
 end
@@ -741,16 +746,17 @@ local function desligar()
         end
         
         -- Limpa o rabo
-        for _, obj in ipairs(animState.tailSegments) do
-            if obj then obj:Destroy() end
+        for _, seg in ipairs(animState.tailSegments) do
+            if seg then seg:Destroy() end
         end
-        animState.tailSegments = {}
 
-        -- Mostra o cabelo de volta
+        -- Mostra o cabelo de volta (targeting hair specifically)
         for _, acc in ipairs(char:GetChildren()) do
             if acc:IsA("Accessory") then
                 local handle = acc:FindFirstChild("Handle")
-                if handle then handle.Transparency = 0 end
+                if handle and (acc.Name:lower():find("hair") or handle:FindFirstChildOfClass("SpecialMesh")) then
+                    handle.Transparency = 0 
+                end
             end
         end
         
@@ -769,15 +775,12 @@ local function desligar()
         end
     end
     
-    -- Reseta estado da animação
-    animState = {
-        time = 0,
-        isMoving = false,
-        moveSpeed = 0,
-        isGrounded = true,
-        verticalVelocity = 0,
-        phase = "idle"
-    }
+    -- Reseta estado da animação mantendo a referência se necessário
+    animState.tailSegments = {}
+    animState.time = 0
+    animState.isMoving = false
+    animState.moveSpeed = 0
+    
     animationTime = 0
     neckRotation = CFrame.identity
 end
