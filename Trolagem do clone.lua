@@ -11,7 +11,7 @@ local camera = workspace.CurrentCamera
 local WALK_SPEED = 16
 local JUMP_POWER = 50
 local GRAVITY    = 196.2
-local STICK_DIST = 1.5  -- FIX: valor menor para evitar oscilação
+local STICK_DIST = 1.5
 
 local ativo = false
 local loop = nil
@@ -23,29 +23,39 @@ local savedWalkSpeed = 16
 local savedJumpPower = 50
 local savedJumpHeight = 7.2
 
--- Estado de movimento
-local surfaceNormal = Vector3.new(0, 1, 0)
-local verticalVelocity = 0
-local isGrounded = false
-local canJump = true
-local currentForward = Vector3.new(0, 0, -1)
-local jumpingFromSurface = false
-local jumpSurfaceNormal = Vector3.new(0, 1, 0)
-local currentAnim = ""
-local smoothGyroCF = nil
-
 -- =============================================================
--- FIX #1: Raycast simplificado — só para baixo (não 6 direções)
--- O raycast em 6 direções detectava paredes/tetos e causava
--- oscilação na força de "grudar no chão"
+-- RAYCAST — múltiplas direções, range reduzido (anti-tremor)
 -- =============================================================
 local function raycastChao(pos, char)
 	local params = RaycastParams.new()
 	params.FilterDescendantsInstances = {char}
 	params.FilterType = Enum.RaycastFilterType.Exclude
 
-	local result = workspace:Raycast(pos, Vector3.new(0, -10, 0), params)
-	return result
+	local directions = {
+		Vector3.new(0, -1, 0),
+		Vector3.new(0, 1, 0),
+		Vector3.new(1, 0, 0),
+		Vector3.new(-1, 0, 0),
+		Vector3.new(0, 0, 1),
+		Vector3.new(0, 0, -1),
+	}
+
+	local rayDist = 5
+	local melhorHit = nil
+	local melhorDist = math.huge
+
+	for _, dir in ipairs(directions) do
+		local result = workspace:Raycast(pos, dir * rayDist, params)
+		if result then
+			local dist = (result.Position - pos).Magnitude
+			if dist < melhorDist then
+				melhorDist = dist
+				melhorHit = result
+			end
+		end
+	end
+
+	return melhorHit, melhorDist
 end
 
 -- ==============================
@@ -112,36 +122,28 @@ local function carregarAnimacoes(char)
 			animObj.Parent = char
 
 			local track = animator:LoadAnimation(animObj)
-			-- FIX: Action3 em vez de Action4 — menos agressivo,
-			-- permite que a animação complete sem ser interrompida
 			track.Priority = Enum.AnimationPriority.Action3
 			track.Looped = (nome ~= "jump")
 
 			animTracks[nome] = track
 			table.insert(animInstances, animObj)
-			carregadas += 1
+			carregadas = carregadas + 1
 		end)
 	end
 
 	return carregadas > 0
 end
 
--- =============================================================
--- FIX #2: Só troca animação quando muda de estado
--- NÃO reinicia a cada frame — isso impedia a animação de completar
--- =============================================================
 local function tocarAnimacao(nome, velocidade)
 	velocidade = velocidade or 1
 	local track = animTracks[nome]
 	if not track then return end
 
 	if currentAnim == nome and track.IsPlaying then
-		-- Já está tocando a animação certa, só ajusta velocidade
 		track:AdjustSpeed(velocidade)
 		return
 	end
 
-	-- Para outras animações
 	for n, t in pairs(animTracks) do
 		if n ~= nome and t and t.IsPlaying then
 			t:Stop(0.2)
@@ -242,11 +244,12 @@ local function criarControlesMobile()
 	local pressing = { Cima = false, Baixo = false, Esq = false, Dir = false }
 
 	local function atualizarMove()
-		moveZ = 0; moveX = 0
-		if pressing.Cima then moveZ += 1 end
-		if pressing.Baixo then moveZ -= 1 end
-		if pressing.Esq then moveX -= 1 end
-		if pressing.Dir then moveX += 1 end
+		moveZ = 0
+		moveX = 0
+		if pressing.Cima then moveZ = moveZ + 1 end
+		if pressing.Baixo then moveZ = moveZ - 1 end
+		if pressing.Esq then moveX = moveX - 1 end
+		if pressing.Dir then moveX = moveX + 1 end
 	end
 
 	local corNormal = Color3.fromRGB(30, 30, 50)
@@ -308,7 +311,8 @@ local function atualizarCabeca(char)
 		if part then
 			for _, obj in ipairs(part:GetChildren()) do
 				if obj:IsA("Motor6D") and obj.Name == "Neck" then
-					neck = obj; break
+					neck = obj
+					break
 				end
 			end
 		end
@@ -321,7 +325,12 @@ local function atualizarCabeca(char)
 	local pitch = math.clamp(math.asin(math.clamp(localLook.Y, -1, 1)), -1.0, 1.0)
 
 	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
-	local base = isR6 and CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0) or CFrame.new(0, 1, 0)
+	local base
+	if isR6 then
+		base = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+	else
+		base = CFrame.new(0, 1, 0)
+	end
 	neck.C0 = base * CFrame.Angles(pitch, yaw, 0)
 end
 
@@ -353,33 +362,29 @@ local function ligar()
 	savedJumpPower = hum.JumpPower
 	savedJumpHeight = hum.JumpHeight
 
-	-- FIX #3: Usar PlatformStand em vez de desativar estados + Physics
-	-- PlatformStand diz ao Humanoid para NÃO controlar o personagem,
-	-- eliminando a luta entre BodyVelocity/BodyGyro e o motor de física
 	hum.PlatformStand = true
 	hum.AutoRotate = false
 
 	hrp.Anchored = false
 
-	-- FIX #4: BodyVelocity com valores mais suaves
-	-- MaxForce alto, mas P moderado (não excessivo) para evitar oscilação
 	local bodyVel = Instance.new("BodyVelocity")
-	bodyVel.MaxForce = Vector3.new(1e5, 0, 1e5)  -- FIX: Y = 0, dejamos que a gravidade funcione
-	bodyVel.Velocity = Vector3.zero
-	bodyVel.P = 2500  -- FIX: valor moderado (era 1250, mas com Y=0 precisa de mais responsividade no XZ)
+	bodyVel.Name = "LagatixaVel"
+	bodyVel.MaxForce = Vector3.new(1e5, 0, 1e5)
+	bodyVel.Velocity = Vector3.new(0, 0, 0)
+	bodyVel.P = 2500
 	bodyVel.Parent = hrp
 
 	local bodyGyro = Instance.new("BodyGyro")
+	bodyGyro.Name = "LagatixaGyro"
 	bodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
-	bodyGyro.P = 3000   -- FIX: valor moderado (era 5000) — menos rígido = menos tremor
-	bodyGyro.D = 200    -- FIX: valor moderado (era 500) — damping suficiente sem causar atraso
+	bodyGyro.P = 3000
+	bodyGyro.D = 200
 	bodyGyro.CFrame = hrp.CFrame
 	bodyGyro.Parent = hrp
 
 	mobileControls = criarControlesMobile()
 	if not mobileControls then return end
 
-	-- Resetar estado
 	surfaceNormal = Vector3.new(0, 1, 0)
 	verticalVelocity = 0
 	isGrounded = false
@@ -393,10 +398,6 @@ local function ligar()
 	task.wait(0.2)
 	tocarAnimacao("idle", 1)
 
-	-- FIX #5: REMOVIDO o stateTimer que forçava Physics a cada 0.5s
-	-- Isso causava micro-interrupções no movimento
-
-	-- FIX #6: Variável para debounce de animação (não restartar desnecessariamente)
 	local animCheckTimer = 0
 
 	loop = RunService.Heartbeat:Connect(function(dt)
@@ -404,7 +405,6 @@ local function ligar()
 		if not char or not char.Parent then return end
 		if not hrp or not hrp.Parent then return end
 
-		-- FIX: Clampa dt para evitar teleporte em lag spikes
 		dt = math.min(dt, 0.05)
 
 		local mx = mobileControls.getMoveX()
@@ -415,7 +415,6 @@ local function ligar()
 		local camLook = camCF.LookVector
 		local camRight = camCF.RightVector
 
-		-- Projetar câmera no plano da superfície
 		local forward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
 		if forward.Magnitude > 0.01 then
 			forward = forward.Unit
@@ -437,18 +436,15 @@ local function ligar()
 			currentForward = moveDir.Unit
 		end
 
-		local lateralVel = Vector3.zero
+		local lateralVel = Vector3.new(0, 0, 0)
 		if isMoving then
 			lateralVel = moveDir.Unit * WALK_SPEED
 		end
 
-		-- RAYCAST SIMPLIFICADO: só para baixo
-		local hit = raycastChao(hrp.Position, char)
+		-- RAYCAST
+		local hit, dist = raycastChao(hrp.Position, char)
 
-		if hit then
-			local dist = (hit.Position - hrp.Position).Magnitude
-
-			-- Suavizar normal da superfície
+		if hit and dist < 6 then
 			surfaceNormal = surfaceNormal:Lerp(hit.Normal, math.min(dt * 8, 1))
 			if surfaceNormal.Magnitude > 0.01 then
 				surfaceNormal = surfaceNormal.Unit
@@ -457,21 +453,16 @@ local function ligar()
 			end
 
 			if dist < STICK_DIST and verticalVelocity <= 0 then
-				-- No chão
 				isGrounded = true
 				verticalVelocity = 0
 				jumpingFromSurface = false
 
-				-- FIX: Força de stick mais suave (menos agressiva)
-				-- Usa lerp suave em vez de correção brusca
 				local targetPos = hit.Position + hit.Normal * STICK_DIST
-				local stickForce = (targetPos - hrp.Position) * 5  -- FIX: valor menor (era 10)
-
+				local stickForce = (targetPos - hrp.Position) * 5
 				bodyVel.Velocity = lateralVel + stickForce
 			else
-				-- No ar perto do chão
 				isGrounded = false
-				verticalVelocity -= GRAVITY * dt
+				verticalVelocity = verticalVelocity - GRAVITY * dt
 
 				if jumpingFromSurface then
 					bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
@@ -480,9 +471,8 @@ local function ligar()
 				end
 			end
 		else
-			-- Longe de superfícies
 			isGrounded = false
-			verticalVelocity -= GRAVITY * dt
+			verticalVelocity = verticalVelocity - GRAVITY * dt
 
 			if jumpingFromSurface then
 				bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
@@ -497,7 +487,10 @@ local function ligar()
 
 		-- PULO
 		if wantsJump and isGrounded and canJump then
-			local isFloor = hit and hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
+			local isFloor = false
+			if hit then
+				isFloor = hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
+			end
 
 			if isFloor then
 				verticalVelocity = JUMP_POWER
@@ -514,7 +507,7 @@ local function ligar()
 			task.delay(0.3, function() canJump = true end)
 		end
 
-		-- ANIMAÇÕES — FIX #7: Só muda quando o estado muda
+		-- ANIMAÇÕES
 		local newAnim = "idle"
 		if not isGrounded then
 			if verticalVelocity > 5 then
@@ -526,27 +519,26 @@ local function ligar()
 			newAnim = "walk"
 		end
 
-		-- Só toca animação quando muda de estado (não a cada frame)
 		if newAnim ~= currentAnim then
 			tocarAnimacao(newAnim, 1)
 		end
 
-		-- Ajusta velocidade da animação de andar
 		if currentAnim == "walk" and animTracks["walk"] and animTracks["walk"].IsPlaying then
-			local speed = math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.3, 1.5)
+			local speed = lateralVel.Magnitude / WALK_SPEED
+			if speed < 0.3 then speed = 0.3 end
+			if speed > 1.5 then speed = 1.5 end
 			animTracks["walk"]:AdjustSpeed(speed)
 		end
 
-		-- FIX #8: Só verifica se animação parou a cada 0.3s (não a cada frame)
-		animCheckTimer += dt
+		animCheckTimer = animCheckTimer + dt
 		if animCheckTimer >= 0.3 then
 			animCheckTimer = 0
-			if animTracks[currentAnim] and not animTracks[currentAnim"].IsPlaying then
+			if animTracks[currentAnim] and not animTracks[currentAnim].IsPlaying then
 				tocarAnimacao(currentAnim, 1)
 			end
 		end
 
-		-- ORIENTAÇÃO SUAVIZADA
+		-- ORIENTAÇÃO
 		local upVec = surfaceNormal
 		local lookVec = currentForward
 
@@ -567,15 +559,13 @@ local function ligar()
 
 		local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
 
-		-- FIX #9: Suavização adaptativa
-		-- Quando parado: lerp suave (não causa tremor por micro-correções)
-		-- Quando andando: lerp mais rápido (responsivo)
-		local lerpRate = isMoving and 15 or 6
-		local lerpSpeed = math.min(dt * lerpRate, 1)
+		local lerpRate = 6
+		if isMoving then lerpRate = 15 end
+		local lerpSpeed = dt * lerpRate
+		if lerpSpeed > 1 then lerpSpeed = 1 end
 		smoothGyroCF = smoothGyroCF:Lerp(targetCF, lerpSpeed)
 		bodyGyro.CFrame = smoothGyroCF
 
-		-- CABEÇA
 		atualizarCabeca(char)
 	end)
 end
@@ -606,7 +596,6 @@ local function desligar()
 		local animate = char:FindFirstChild("Animate")
 		if animate then animate.Disabled = false end
 
-		-- Reset Neck
 		for _, partName in ipairs({"Head", "UpperTorso", "Torso"}) do
 			local part = char:FindFirstChild(partName)
 			if part then
@@ -631,12 +620,12 @@ local function desligar()
 
 		if hrp then
 			for _, obj in ipairs(hrp:GetChildren()) do
-				if obj:IsA("BodyVelocity") or obj:IsA("BodyGyro") then
+				if obj.Name == "LagatixaVel" or obj.Name == "LagatixaGyro" then
 					obj:Destroy()
 				end
 			end
-			hrp.AssemblyLinearVelocity = Vector3.zero
-			hrp.AssemblyAngularVelocity = Vector3.zero
+			hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+			hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 		end
 	end
 end
@@ -668,7 +657,7 @@ local function criarGUI()
 	title.Size = UDim2.new(1, 0, 0, 40)
 	title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 	title.BorderSizePixel = 0
-	title.Text = "🦎 LAGATIXA v14"
+	title.Text = "LAGATIXA v14"
 	title.TextColor3 = Color3.fromRGB(0, 200, 255)
 	title.TextSize = 18
 	title.Font = Enum.Font.GothamBold
@@ -702,7 +691,7 @@ local function criarGUI()
 		if ativo then
 			btn.Text = "DESLIGAR"
 			btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-			status.Text = "ON ✓"
+			status.Text = "ON"
 			status.TextColor3 = Color3.fromRGB(100, 255, 100)
 			ligar()
 		else
@@ -725,4 +714,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA v14] Sem tremor ✓")
+print("[LAGATIXA v14] Carregado com sucesso")
