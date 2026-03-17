@@ -30,7 +30,7 @@ local animState = {
     isGrounded = true,
     verticalVelocity = 0,
     phase = "idle",
-    tailAccessories = {}, -- Agora guardamos as referências dos acessórios originais
+    hairs = {}, -- Guarda referências aos acessórios de cabelo sequestrados
     tailCooldown = false
 }
 
@@ -196,15 +196,13 @@ local function animarPersonagem(dt, isMoving, moveSpeed)
         motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, 0.35)
     end
     
-    -- Animação do RABO (Agora usando acessórios visíveis para todos)
-    if #animState.tailAccessories > 0 then
-        for _, tbl in ipairs(animState.tailAccessories) do
-            local weld = tbl.weld
-            if weld and weld.Parent then
-                local delay = 0.1
-                local wave = math.sin(animationTime * 0.8) * math.rad(25)
-                -- O rabo de cabelo balança suavemente
-                weld.C0 = weld.C0:Lerp(tbl.origC0 * CFrame.Angles(0, wave, 0), 0.2)
+    -- Animação do RABO DE CABELO (Wiggle Visível para Todos)
+    if #animState.hairs > 0 then
+        local wave = math.sin(animationTime * 0.8) * math.rad(25)
+        for _, data in ipairs(animState.hairs) do
+            if data.handle and data.weld then
+                -- O rabo de cabelo balança de um lado para o outro
+                data.weld.C0 = data.weld.C0:Lerp(data.baseC0 * CFrame.Angles(0, wave, 0), 0.2)
             end
         end
     end
@@ -216,114 +214,96 @@ end
 local neckRotation = CFrame.identity -- Para suavização
 
 -- ==============================
--- SISTEMA DE RABO VISÍVEL (FE)
+-- SISTEMA DE RABO DE CABELO (SERVER-SIDED BY HAIRS)
 -- ==============================
 local function criarRabo(char)
     local root = char:FindFirstChild("LowerTorso") or char:FindFirstChild("Torso")
     if not root then return end
     
-    -- Limpa lista antiga
-    animState.tailAccessories = {}
+    animState.hairs = {}
     
-    -- Procura cabelos ou acessórios de cabeça para "sequestrar"
+    -- Varre os acessórios em busca de cabelos
     for _, acc in ipairs(char:GetChildren()) do
         if acc:IsA("Accessory") then
+            -- Verifica se é cabelo (geralmente tem 'Hair' no nome ou está no Head)
             local handle = acc:FindFirstChild("Handle")
             if handle then
-                -- Verifica se é um cabelo ou algo na cabeça (pelo nome ou attachments)
-                local isHair = acc.Name:lower():find("hair") or handle:FindFirstChild("HairAttachment") or handle:FindFirstChild("HatAttachment")
-                
-                if isHair then
+                local attachment = handle:FindFirstChildOfClass("Attachment")
+                if attachment and (attachment.Name:lower():find("hair") or attachment.Name:lower():find("hat")) then
+                    -- Encontra o Weld original ou cria um novo para manipular
                     local weld = handle:FindFirstChildOfClass("Weld") or handle:FindFirstChildOfClass("ManualWeld")
+                    
                     if weld then
                         -- Salva o estado original para poder restaurar depois
-                        local originalPart0 = weld.Part0
-                        local originalC0 = weld.C0
-                        local originalC1 = weld.C1
-                        
-                        -- Move o acessório para a cintura (VISÍVEL PARA TODOS)
-                        weld.Part0 = root
-                        -- Ajusta a posição para ficar atrás como um rabo
-                        weld.C0 = CFrame.new(0, -0.6, 0.6) * CFrame.Angles(math.rad(-90), 0, 0)
-                        
-                        table.insert(animState.tailAccessories, {
-                            acc = acc,
+                        table.insert(animState.hairs, {
+                            accessory = acc,
+                            handle = handle,
                             weld = weld,
-                            origP0 = originalPart0,
-                            origC0 = weld.C0, -- A nova base do rabo
-                            realOrigC0 = originalC0, -- A posição real na cabeça
-                            realOrigC1 = originalC1
+                            originalPart0 = weld.Part0,
+                            originalC0 = weld.C0,
+                            originalC1 = weld.C1,
+                            baseC0 = CFrame.new(0, -0.6, 0.6) * CFrame.Angles(math.rad(90), 0, 0) -- Posição de rabo
                         })
+                        
+                        -- Move o cabelo para a cintura! Todos vão ver isso.
+                        weld.Part0 = root
+                        weld.C0 = CFrame.new(0, -0.6, 0.6) * CFrame.Angles(math.rad(90), 0, 0)
                     end
                 end
             end
         end
     end
-    
-    if #animState.tailAccessories == 0 then
-        warn("[LAGATIXA] Nenhum acessório (cabelo) encontrado para fazer o rabo!")
-    end
 end
 
 local function soltarRabo()
-    if #animState.tailAccessories == 0 or animState.tailCooldown then return end
+    if #animState.hairs == 0 or animState.tailCooldown then return end
     
     animState.tailCooldown = true
-    local items = animState.tailAccessories
     
-    for _, tbl in ipairs(items) do
-        local weld = tbl.weld
-        local handle = tbl.acc:FindFirstChild("Handle")
-        
-        if weld and handle then
-            -- Quebra o vínculo (O rabo cai, visível para todos!)
-            weld.Part0 = nil
-            handle.CanCollide = true
-            handle.Velocity = Vector3.new(0, 5, 0) + player.Character.HumanoidRootPart.CFrame.LookVector * -10
-            
-            -- Twitch effect (Vibrar no chão)
-            task.spawn(function()
-                local t = 0
-                while t < 5 and handle.Parent do
-                    handle.RotVelocity = Vector3.new(math.random(-50,50), math.random(-50,50), math.random(-50,50))
-                    t = t + 0.1
-                    task.wait(0.1)
-                end
-                -- Esconde temporariamente até regenerar
-                handle.Transparency = 1
-            end)
+    -- Como não podemos "dropar" uma peça do servidor, vamos fazer o cabelo
+    -- "voar" para longe e depois voltar, simulando a perda
+    for _, data in ipairs(animState.hairs) do
+        if data.weld then
+            -- Manda o cabelo para trás (distração)
+            data.weld.C0 = CFrame.new(0, -1, 5) * CFrame.Angles(math.rad(180), 0, 0)
         end
     end
     
-    -- Speed boost
-    WALK_SPEED = 24
-    task.delay(3, function() WALK_SPEED = 16 end)
+    -- Speed boost de "fuga"
+    local originalSpeed = WALK_SPEED
+    WALK_SPEED = 28
+    task.delay(2.5, function()
+        WALK_SPEED = 16
+    end)
     
-    print("🦎 VOCÊ FICOU CALVO! Rabo solto para distração. Regenerando...")
+    print("🦎 CABELO-RABO SOLTADO! Regenerando...")
     
     task.delay(8, function()
-        if ativo then
-            -- Regenera (Sendo "possuído" pelo cabelo de volta)
-            for _, tbl in ipairs(items) do
-                local weld = tbl.weld
-                local handle = tbl.acc:FindFirstChild("Handle")
-                if weld and handle then
-                    handle.Transparency = 0
-                    handle.CanCollide = false
-                    weld.Part0 = player.Character:FindFirstChild("LowerTorso") or player.Character:FindFirstChild("Torso")
-                    weld.C0 = tbl.origC0
+        if ativo and #animState.hairs > 0 then
+            -- Regenera (volta para a posição de rabo)
+            for _, data in ipairs(animState.hairs) do
+                if data.weld then
+                    data.weld.C0 = data.baseC0
                 end
             end
-            animState.tailAccessories = items
             animState.tailCooldown = false
-            print("🦎 CABELO/RABO REGENERADO!")
+            print("🦎 CABELO-RABO REGENERADO!")
         else
             animState.tailCooldown = false
         end
     end)
 end
 
-local function atualizarCabeca(char, surfaceNormal)
+local function restaurarCabelos()
+    for _, data in ipairs(animState.hairs) do
+        if data.weld and data.weld.Parent then
+            data.weld.Part0 = data.originalPart0
+            data.weld.C0 = data.originalC0
+            data.weld.C1 = data.originalC1
+        end
+    end
+    animState.hairs = {}
+end
     local neck = nil
     
     -- No R15, o Neck costuma ser filho do UpperTorso
@@ -801,18 +781,8 @@ local function desligar()
         -- Limpa a tabela de motors
         bodyMotors = {}
 
-        -- Restaura acessórios (cabelo) para posição original
-        for _, tbl in ipairs(animState.tailAccessories) do
-            local weld = tbl.weld
-            local handle = tbl.acc:FindFirstChild("Handle")
-            if weld and tbl.origP0 then
-                weld.Part0 = tbl.origP0
-                weld.C0 = tbl.realOrigC0
-                weld.C1 = tbl.realOrigC1
-                if handle then handle.Transparency = 0 end
-            end
-        end
-        animState.tailAccessories = {}
+        -- Restaura cabelos
+        restaurarCabelos()
 
         if hrp then
             for _, obj in ipairs(hrp:GetChildren()) do
@@ -834,7 +804,7 @@ local function desligar()
         isGrounded = true,
         verticalVelocity = 0,
         phase = "idle",
-        tailAccessories = {},
+        hairs = {},
         tailCooldown = false
     }
     animationTime = 0
