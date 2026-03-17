@@ -1,11 +1,10 @@
 
 -- =============================================================
---  MODO LAGATIXA  v11  -  ANIMAÇÕES CORRIGIDAS
+--  MODO LAGATIXA  v12  -  ROTAÇÃO + ANIMAÇÕES FUNCIONANDO
 -- =============================================================
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
-local TweenService     = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -27,14 +26,13 @@ local mobileControls = nil
 local animTracks = {}
 local animInstances = {}
 
--- Valores salvos do Humanoid
 local savedWalkSpeed = 16
 local savedJumpPower = 50
 local savedJumpHeight = 7.2
 local savedAutoRotate = true
 
 -- ==============================
--- RAYCAST SIMPLES
+-- RAYCAST
 -- ==============================
 local function raycastChao(pos, char)
 	local params = RaycastParams.new()
@@ -68,10 +66,10 @@ local function raycastChao(pos, char)
 end
 
 -- ==============================
--- SISTEMA DE ANIMAÇÕES
+-- ANIMAÇÕES
 -- ==============================
 local function pararTodasAnimacoes()
-	for nome, track in pairs(animTracks) do
+	for _, track in pairs(animTracks) do
 		if track and track.IsPlaying then
 			track:Stop(0.1)
 		end
@@ -82,35 +80,27 @@ local function limparAnimacoes()
 	pararTodasAnimacoes()
 	animTracks = {}
 	for _, inst in ipairs(animInstances) do
-		if inst and inst.Parent then
-			inst:Destroy()
-		end
+		if inst and inst.Parent then inst:Destroy() end
 	end
 	animInstances = {}
 end
 
 local function carregarAnimacoes(char)
 	local hum = char:FindFirstChildOfClass("Humanoid")
-	if not hum then
-		warn("[LAGATIXA] Humanoid não encontrado!")
-		return false
-	end
+	if not hum then return false end
 
 	limparAnimacoes()
 
-	-- USA ANIMATOR (não deprecado)
 	local animator = hum:FindFirstChildOfClass("Animator")
 	if not animator then
 		animator = Instance.new("Animator")
 		animator.Parent = hum
 	end
 
-	-- Para TODAS as animações existentes
 	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
 		track:Stop(0)
 	end
 
-	-- Detecta R6 vs R15
 	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
 
 	local anims
@@ -121,7 +111,6 @@ local function carregarAnimacoes(char)
 			jump = "rbxassetid://125750702",
 			fall = "rbxassetid://180436148",
 		}
-		print("[LAGATIXA] Rig: R6")
 	else
 		anims = {
 			idle = "rbxassetid://507766666",
@@ -129,7 +118,6 @@ local function carregarAnimacoes(char)
 			jump = "rbxassetid://507765000",
 			fall = "rbxassetid://507767968",
 		}
-		print("[LAGATIXA] Rig: R15")
 	end
 
 	local carregadas = 0
@@ -138,11 +126,11 @@ local function carregarAnimacoes(char)
 			local animObj = Instance.new("Animation")
 			animObj.AnimationId = id
 			animObj.Name = "Lagatixa_" .. nome
-			animObj.Parent = char  -- NÃO destrói, mantém viva
+			animObj.Parent = char
 
 			local track = animator:LoadAnimation(animObj)
-			track.Priority = Enum.AnimationPriority.Action
-			track.Looped = (nome ~= "jump")  -- tudo loopa menos jump
+			track.Priority = Enum.AnimationPriority.Action4
+			track.Looped = (nome ~= "jump")
 
 			animTracks[nome] = track
 			table.insert(animInstances, animObj)
@@ -153,13 +141,11 @@ local function carregarAnimacoes(char)
 		end
 	end
 
-	print("[LAGATIXA] Animações carregadas: " .. carregadas .. "/4")
 	return carregadas > 0
 end
 
 local function tocarAnimacao(nome, velocidade)
 	velocidade = velocidade or 1
-
 	local track = animTracks[nome]
 	if not track then return end
 
@@ -168,7 +154,6 @@ local function tocarAnimacao(nome, velocidade)
 		return
 	end
 
-	-- Para TODAS as outras primeiro
 	for n, t in pairs(animTracks) do
 		if n ~= nome and t and t.IsPlaying then
 			t:Stop(0.15)
@@ -180,7 +165,7 @@ local function tocarAnimacao(nome, velocidade)
 end
 
 -- ==============================
--- CONTROLES MOBILE COM SETAS
+-- CONTROLES MOBILE
 -- ==============================
 local function criarControlesMobile()
 	local gui = player.PlayerGui:FindFirstChild("LagatixaGUI")
@@ -210,13 +195,11 @@ local function criarControlesMobile()
 		btn.Font = Enum.Font.GothamBold
 		btn.Parent = parentFrame
 		btn.AutoButtonColor = false
-
 		Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
 		local stroke = Instance.new("UIStroke", btn)
 		stroke.Color = Color3.fromRGB(0, 150, 255)
 		stroke.Thickness = 2
 		stroke.Transparency = 0.4
-
 		return btn
 	end
 
@@ -227,10 +210,10 @@ local function criarControlesMobile()
 	dpadFrame.BackgroundTransparency = 1
 	dpadFrame.Parent = controls
 
-	local btnCima   = criarSeta("Cima",   "▲", 70, 0,   dpadFrame)
-	local btnBaixo  = criarSeta("Baixo",  "▼", 70, 140, dpadFrame)
-	local btnEsq    = criarSeta("Esq",    "◀", 0,  70,  dpadFrame)
-	local btnDir    = criarSeta("Dir",     "▶", 140, 70, dpadFrame)
+	local btnCima  = criarSeta("Cima",  "▲", 70, 0,   dpadFrame)
+	local btnBaixo = criarSeta("Baixo", "▼", 70, 140, dpadFrame)
+	local btnEsq   = criarSeta("Esq",  "◀", 0,  70,  dpadFrame)
+	local btnDir   = criarSeta("Dir",  "▶", 140, 70, dpadFrame)
 
 	local centro = Instance.new("Frame")
 	centro.Size = UDim2.new(0, 55, 0, 55)
@@ -254,7 +237,6 @@ local function criarControlesMobile()
 	jumpBtn.Font = Enum.Font.GothamBold
 	jumpBtn.AutoButtonColor = false
 	jumpBtn.Parent = controls
-
 	Instance.new("UICorner", jumpBtn).CornerRadius = UDim.new(1, 0)
 	local jumpStroke = Instance.new("UIStroke", jumpBtn)
 	jumpStroke.Color = Color3.fromRGB(0, 255, 150)
@@ -281,8 +263,8 @@ local function criarControlesMobile()
 		if pressing.Dir then moveX = moveX + 1 end
 	end
 
-	local corNormal  = Color3.fromRGB(30, 30, 50)
-	local corPress   = Color3.fromRGB(0, 120, 255)
+	local corNormal = Color3.fromRGB(30, 30, 50)
+	local corPress  = Color3.fromRGB(0, 120, 255)
 
 	local function conectarSeta(btn, nome)
 		btn.InputBegan:Connect(function(input)
@@ -337,7 +319,6 @@ end
 -- ==============================
 local function atualizarCabeca(char)
 	local neck = nil
-
 	for _, partName in ipairs({"Head", "UpperTorso", "Torso"}) do
 		local part = char:FindFirstChild(partName)
 		if part then
@@ -359,7 +340,6 @@ local function atualizarCabeca(char)
 
 	local yaw = math.atan2(-localLook.X, -localLook.Z)
 	local pitch = math.asin(math.clamp(localLook.Y, -1, 1))
-
 	yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
 	pitch = math.clamp(pitch, -math.rad(60), math.rad(60))
 
@@ -385,13 +365,11 @@ local function ligar()
 	local hum = char:FindFirstChildOfClass("Humanoid")
 	if not hrp or not hum then return end
 
-	-- ★ DESLIGA ANIMATE
+	-- Desliga Animate
 	local animate = char:FindFirstChild("Animate")
-	if animate then
-		animate.Disabled = true
-	end
+	if animate then animate.Disabled = true end
 
-	-- ★ PARA todas animações existentes
+	-- Para animações existentes
 	local animator = hum:FindFirstChildOfClass("Animator")
 	if animator then
 		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
@@ -401,53 +379,54 @@ local function ligar()
 
 	task.wait(0.1)
 
-	-- ★ CARREGA NOSSAS ANIMAÇÕES
-	local animOk = carregarAnimacoes(char)
-	if not animOk then
-		warn("[LAGATIXA] Falha ao carregar animações!")
-	end
+	-- Carrega nossas animações
+	carregarAnimacoes(char)
 
 	-- =====================================================
-	-- ★★★ A CORREÇÃO PRINCIPAL: NÃO USA PLATFORMSTAND ★★★
-	-- PlatformStand = true DESATIVA o Animator!
-	-- Em vez disso, zeramos WalkSpeed/JumpPower
+	-- ★★★ SALVA VALORES ORIGINAIS
 	-- =====================================================
-
-	-- Salva valores originais
 	savedWalkSpeed = hum.WalkSpeed
 	savedJumpPower = hum.JumpPower
 	savedJumpHeight = hum.JumpHeight
 	savedAutoRotate = hum.AutoRotate
 
-	-- Desativa movimento padrão SEM desativar animações
+	-- =====================================================
+	-- ★★★ DESATIVA ESTADOS QUE FORÇAM FICAR DE PÉ ★★★
+	-- =====================================================
+	hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Running, false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Landed, false)
+
+	-- ★ Zera movimento padrão
 	hum.WalkSpeed = 0
 	hum.JumpPower = 0
 	hum.JumpHeight = 0
 	hum.AutoRotate = false
 
-	-- ★ NÃO faz PlatformStand = true!
-	-- hum.PlatformStand = true  ← ISSO MATA ANIMAÇÕES
+	-- ★★★ FORÇA ESTADO PHYSICS — permite rotação livre + animações ★★★
+	hum:ChangeState(Enum.HumanoidStateType.Physics)
 
 	hrp.Anchored = false
 
-	-- ★ Forças ALTAS para vencer a gravidade do Humanoid
+	-- ★★★ FORÇAS INFINITAS — vence qualquer resistência do Humanoid ★★★
 	local bodyVel = Instance.new("BodyVelocity")
-	bodyVel.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	bodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 	bodyVel.Velocity = Vector3.zero
 	bodyVel.Parent = hrp
 
 	local bodyGyro = Instance.new("BodyGyro")
-	bodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
-	bodyGyro.P = 5000
-	bodyGyro.D = 500
+	bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+	bodyGyro.P = 1e6
+	bodyGyro.D = 1e4
 	bodyGyro.CFrame = hrp.CFrame
 	bodyGyro.Parent = hrp
 
 	mobileControls = criarControlesMobile()
-	if not mobileControls then
-		warn("[LAGATIXA] Erro ao criar controles!")
-		return
-	end
+	if not mobileControls then return end
 
 	local surfaceNormal = Vector3.new(0, 1, 0)
 	local verticalVelocity = 0
@@ -458,26 +437,28 @@ local function ligar()
 	local jumpSurfaceNormal = Vector3.new(0, 1, 0)
 	local currentAnim = ""
 
-	-- Toca idle de início
 	task.wait(0.2)
 	tocarAnimacao("idle", 1)
 	currentAnim = "idle"
-	print("[LAGATIXA] Idle inicial tocando:", animTracks["idle"] and animTracks["idle"].IsPlaying)
 
 	loop = RunService.Heartbeat:Connect(function(dt)
 		if not ativo then return end
 		if not char or not char.Parent then return end
 		if not hrp or not hrp.Parent then return end
 
-		-- ★ Mantém WalkSpeed zerado (caso algo tente mudar)
-		if hum.WalkSpeed ~= 0 then hum.WalkSpeed = 0 end
-		if hum.JumpPower ~= 0 then hum.JumpPower = 0 end
+		-- ★★★ FORÇA ESTADO PHYSICS A CADA FRAME ★★★
+		if hum:GetState() ~= Enum.HumanoidStateType.Physics then
+			hum:ChangeState(Enum.HumanoidStateType.Physics)
+		end
+
+		-- Mantém valores zerados
+		hum.WalkSpeed = 0
+		hum.JumpPower = 0
 
 		local mx = mobileControls.getMoveX()
 		local mz = mobileControls.getMoveZ()
 		local wantsJump = mobileControls.getJump()
 
-		-- DIREÇÕES DA CÂMERA
 		local camCF = camera.CFrame
 		local camLook = camCF.LookVector
 		local camRight = camCF.RightVector
@@ -516,7 +497,7 @@ local function ligar()
 			lateralVel = moveDir.Unit * WALK_SPEED
 		end
 
-		-- DETECÇÃO DE SUPERFÍCIE
+		-- SUPERFÍCIE
 		local hit, dist = raycastChao(hrp.Position, char)
 
 		local isFloor = false
@@ -576,19 +557,13 @@ local function ligar()
 				isGrounded = false
 				jumpingFromSurface = true
 			end
-
 			canJump = false
 			mobileControls.resetJump()
-			task.delay(0.3, function()
-				canJump = true
-			end)
+			task.delay(0.3, function() canJump = true end)
 		end
 
-		-- ============================
-		-- ★★★ ANIMAÇÕES ★★★
-		-- ============================
+		-- ANIMAÇÕES
 		local newAnim = "idle"
-
 		if not isGrounded then
 			if verticalVelocity > 5 then
 				newAnim = "jump"
@@ -597,30 +572,23 @@ local function ligar()
 			end
 		elseif isMoving then
 			newAnim = "walk"
-		else
-			newAnim = "idle"
 		end
 
-		-- Troca animação se mudou
 		if newAnim ~= currentAnim then
 			currentAnim = newAnim
 			tocarAnimacao(newAnim, 1)
 		end
 
-		-- Ajusta velocidade do walk
 		if currentAnim == "walk" and animTracks["walk"] then
 			local speed = math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.5, 2)
 			animTracks["walk"]:AdjustSpeed(speed)
 		end
 
-		-- ★ Proteção: se animação parou sozinha, retoca
 		if animTracks[currentAnim] and not animTracks[currentAnim].IsPlaying then
 			tocarAnimacao(currentAnim, 1)
 		end
 
-		-- ============================
-		-- ORIENTAÇÃO DO CORPO
-		-- ============================
+		-- ★★★ ORIENTAÇÃO — corpo se alinha à superfície ★★★
 		local upVec = surfaceNormal
 		local lookVec = currentForward
 
@@ -639,8 +607,7 @@ local function ligar()
 		end
 		lookVec = upVec:Cross(rightVec).Unit
 
-		local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
-		bodyGyro.CFrame = targetCF
+		bodyGyro.CFrame = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
 
 		-- CABEÇA
 		atualizarCabeca(char)
@@ -669,20 +636,28 @@ local function desligar()
 		local hrp = char:FindFirstChild("HumanoidRootPart")
 
 		if hum then
-			-- ★ Restaura valores originais
+			-- ★★★ RESTAURA TODOS OS ESTADOS ★★★
+			hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+			hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+			hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+			hum:SetStateEnabled(Enum.HumanoidStateType.Running, true)
+			hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, true)
+			hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
+			hum:SetStateEnabled(Enum.HumanoidStateType.Landed, true)
+
 			hum.PlatformStand = false
 			hum.WalkSpeed = savedWalkSpeed or 16
 			hum.JumpPower = savedJumpPower or 50
 			hum.JumpHeight = savedJumpHeight or 7.2
 			hum.AutoRotate = true
+
+			-- ★ Volta pro estado normal
+			hum:ChangeState(Enum.HumanoidStateType.GettingUp)
 		end
 
 		local animate = char:FindFirstChild("Animate")
-		if animate then
-			animate.Disabled = false
-		end
+		if animate then animate.Disabled = false end
 
-		-- Reseta Neck
 		for _, partName in ipairs({"Head", "UpperTorso", "Torso"}) do
 			local part = char:FindFirstChild(partName)
 			if part then
@@ -699,7 +674,6 @@ local function desligar()
 			end
 		end
 
-		-- Remove Animation instances
 		for _, obj in ipairs(char:GetChildren()) do
 			if obj:IsA("Animation") and obj.Name:find("Lagatixa_") then
 				obj:Destroy()
@@ -739,14 +713,13 @@ local function criarGUI()
 	frame.Active = true
 	frame.Draggable = true
 	frame.Parent = gui
-
 	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
 
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 40)
 	title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 	title.BorderSizePixel = 0
-	title.Text = "🦎 LAGATIXA v11"
+	title.Text = "🦎 LAGATIXA v12"
 	title.TextColor3 = Color3.fromRGB(0, 200, 255)
 	title.TextSize = 18
 	title.Font = Enum.Font.GothamBold
@@ -773,12 +746,10 @@ local function criarGUI()
 	btn.TextSize = 18
 	btn.Font = Enum.Font.GothamBold
 	btn.Parent = frame
-
 	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
 
 	btn.MouseButton1Click:Connect(function()
 		ativo = not ativo
-
 		if ativo then
 			btn.Text = "DESLIGAR"
 			btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
@@ -795,9 +766,6 @@ local function criarGUI()
 	end)
 end
 
--- ==============================
--- INICIO
--- ==============================
 criarGUI()
 
 player.CharacterAdded:Connect(function()
@@ -808,4 +776,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA v11] Pronto! PlatformStand REMOVIDO - animações funcionam ✓")
+print("[LAGATIXA v12] Rotação + Animações ✓")
