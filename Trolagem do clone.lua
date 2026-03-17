@@ -1,6 +1,6 @@
 
 -- =============================================================
---  MODO LAGATIXA  v12  -  ROTAÇÃO + ANIMAÇÕES FUNCIONANDO
+--  MODO LAGATIXA  v13  -  SEM TREMOR
 -- =============================================================
 
 local Players          = game:GetService("Players")
@@ -9,17 +9,11 @@ local RunService       = game:GetService("RunService")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- ==============================
--- CONSTANTES
--- ==============================
 local WALK_SPEED   = 16
 local JUMP_POWER   = 50
 local GRAVITY      = 196.2
 local STICK_DIST   = 3
 
--- ==============================
--- ESTADO
--- ==============================
 local ativo = false
 local loop = nil
 local mobileControls = nil
@@ -29,7 +23,6 @@ local animInstances = {}
 local savedWalkSpeed = 16
 local savedJumpPower = 50
 local savedJumpHeight = 7.2
-local savedAutoRotate = true
 
 -- ==============================
 -- RAYCAST
@@ -122,7 +115,7 @@ local function carregarAnimacoes(char)
 
 	local carregadas = 0
 	for nome, id in pairs(anims) do
-		local ok, err = pcall(function()
+		local ok = pcall(function()
 			local animObj = Instance.new("Animation")
 			animObj.AnimationId = id
 			animObj.Name = "Lagatixa_" .. nome
@@ -134,11 +127,8 @@ local function carregarAnimacoes(char)
 
 			animTracks[nome] = track
 			table.insert(animInstances, animObj)
-			carregadas = carregadas + 1
+			carregadas += 1
 		end)
-		if not ok then
-			warn("[LAGATIXA] ERRO animação " .. nome .. ": " .. tostring(err))
-		end
 	end
 
 	return carregadas > 0
@@ -238,9 +228,7 @@ local function criarControlesMobile()
 	jumpBtn.AutoButtonColor = false
 	jumpBtn.Parent = controls
 	Instance.new("UICorner", jumpBtn).CornerRadius = UDim.new(1, 0)
-	local jumpStroke = Instance.new("UIStroke", jumpBtn)
-	jumpStroke.Color = Color3.fromRGB(0, 255, 150)
-	jumpStroke.Thickness = 3
+	Instance.new("UIStroke", jumpBtn).Color = Color3.fromRGB(0, 255, 150)
 
 	local jumpLabel = Instance.new("TextLabel")
 	jumpLabel.Size = UDim2.new(1, 0, 0, 20)
@@ -255,12 +243,11 @@ local function criarControlesMobile()
 	local pressing = { Cima = false, Baixo = false, Esq = false, Dir = false }
 
 	local function atualizarMove()
-		moveZ = 0
-		moveX = 0
-		if pressing.Cima then moveZ = moveZ + 1 end
-		if pressing.Baixo then moveZ = moveZ - 1 end
-		if pressing.Esq then moveX = moveX - 1 end
-		if pressing.Dir then moveX = moveX + 1 end
+		moveZ = 0; moveX = 0
+		if pressing.Cima then moveZ += 1 end
+		if pressing.Baixo then moveZ -= 1 end
+		if pressing.Esq then moveX -= 1 end
+		if pressing.Dir then moveX += 1 end
 	end
 
 	local corNormal = Color3.fromRGB(30, 30, 50)
@@ -285,23 +272,21 @@ local function criarControlesMobile()
 		end)
 	end
 
-	conectarSeta(btnCima,  "Cima")
+	conectarSeta(btnCima, "Cima")
 	conectarSeta(btnBaixo, "Baixo")
-	conectarSeta(btnEsq,   "Esq")
-	conectarSeta(btnDir,    "Dir")
+	conectarSeta(btnEsq, "Esq")
+	conectarSeta(btnDir, "Dir")
 
 	jumpBtn.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			wantsJump = true
 			jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-			jumpBtn.BackgroundTransparency = 0.1
 		end
 	end)
 	jumpBtn.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			wantsJump = false
 			jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
-			jumpBtn.BackgroundTransparency = 0.2
 		end
 	end)
 
@@ -315,7 +300,7 @@ local function criarControlesMobile()
 end
 
 -- ==============================
--- CABEÇA OLHA PRA CÂMERA
+-- CABEÇA
 -- ==============================
 local function atualizarCabeca(char)
 	local neck = nil
@@ -324,34 +309,21 @@ local function atualizarCabeca(char)
 		if part then
 			for _, obj in ipairs(part:GetChildren()) do
 				if obj:IsA("Motor6D") and obj.Name == "Neck" then
-					neck = obj
-					break
+					neck = obj; break
 				end
 			end
 		end
 		if neck then break end
 	end
-
 	if not neck or not neck.Part0 then return end
 
-	local camLook = camera.CFrame.LookVector
-	local torsoCF = neck.Part0.CFrame
-	local localLook = torsoCF:VectorToObjectSpace(camLook)
-
-	local yaw = math.atan2(-localLook.X, -localLook.Z)
-	local pitch = math.asin(math.clamp(localLook.Y, -1, 1))
-	yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
-	pitch = math.clamp(pitch, -math.rad(60), math.rad(60))
+	local localLook = neck.Part0.CFrame:VectorToObjectSpace(camera.CFrame.LookVector)
+	local yaw = math.clamp(math.atan2(-localLook.X, -localLook.Z), -1.2, 1.2)
+	local pitch = math.clamp(math.asin(math.clamp(localLook.Y, -1, 1)), -1.0, 1.0)
 
 	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
-	local originalC0
-	if isR6 then
-		originalC0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
-	else
-		originalC0 = CFrame.new(0, 1, 0)
-	end
-
-	neck.C0 = originalC0 * CFrame.Angles(pitch, yaw, 0)
+	local base = isR6 and CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0) or CFrame.new(0, 1, 0)
+	neck.C0 = base * CFrame.Angles(pitch, yaw, 0)
 end
 
 -- ==============================
@@ -365,11 +337,9 @@ local function ligar()
 	local hum = char:FindFirstChildOfClass("Humanoid")
 	if not hrp or not hum then return end
 
-	-- Desliga Animate
 	local animate = char:FindFirstChild("Animate")
 	if animate then animate.Disabled = true end
 
-	-- Para animações existentes
 	local animator = hum:FindFirstChildOfClass("Animator")
 	if animator then
 		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
@@ -378,50 +348,50 @@ local function ligar()
 	end
 
 	task.wait(0.1)
-
-	-- Carrega nossas animações
 	carregarAnimacoes(char)
 
-	-- =====================================================
-	-- ★★★ SALVA VALORES ORIGINAIS
-	-- =====================================================
 	savedWalkSpeed = hum.WalkSpeed
 	savedJumpPower = hum.JumpPower
 	savedJumpHeight = hum.JumpHeight
-	savedAutoRotate = hum.AutoRotate
 
-	-- =====================================================
-	-- ★★★ DESATIVA ESTADOS QUE FORÇAM FICAR DE PÉ ★★★
-	-- =====================================================
-	hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
-	hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-	hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-	hum:SetStateEnabled(Enum.HumanoidStateType.Running, false)
-	hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, false)
-	hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
-	hum:SetStateEnabled(Enum.HumanoidStateType.Landed, false)
+	-- ★ DESATIVA ESTADOS QUE FORÇAM FICAR DE PÉ
+	local estadosDesativar = {
+		Enum.HumanoidStateType.GettingUp,
+		Enum.HumanoidStateType.FallingDown,
+		Enum.HumanoidStateType.Ragdoll,
+		Enum.HumanoidStateType.Running,
+		Enum.HumanoidStateType.RunningNoPhysics,
+		Enum.HumanoidStateType.Freefall,
+		Enum.HumanoidStateType.Landed,
+		Enum.HumanoidStateType.Jumping,
+		Enum.HumanoidStateType.Climbing,
+		Enum.HumanoidStateType.Swimming,
+	}
+	for _, estado in ipairs(estadosDesativar) do
+		hum:SetStateEnabled(estado, false)
+	end
 
-	-- ★ Zera movimento padrão
 	hum.WalkSpeed = 0
 	hum.JumpPower = 0
 	hum.JumpHeight = 0
 	hum.AutoRotate = false
 
-	-- ★★★ FORÇA ESTADO PHYSICS — permite rotação livre + animações ★★★
+	-- ★★★ ESTADO PHYSICS — UMA VEZ SÓ ★★★
 	hum:ChangeState(Enum.HumanoidStateType.Physics)
 
 	hrp.Anchored = false
 
-	-- ★★★ FORÇAS INFINITAS — vence qualquer resistência do Humanoid ★★★
+	-- ★★★ FORÇAS MODERADAS — sem tremor ★★★
 	local bodyVel = Instance.new("BodyVelocity")
-	bodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bodyVel.MaxForce = Vector3.new(5e4, 5e4, 5e4)
 	bodyVel.Velocity = Vector3.zero
+	bodyVel.P = 1250
 	bodyVel.Parent = hrp
 
 	local bodyGyro = Instance.new("BodyGyro")
-	bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-	bodyGyro.P = 1e6
-	bodyGyro.D = 1e4
+	bodyGyro.MaxTorque = Vector3.new(5e4, 5e4, 5e4)
+	bodyGyro.P = 5000
+	bodyGyro.D = 500
 	bodyGyro.CFrame = hrp.CFrame
 	bodyGyro.Parent = hrp
 
@@ -436,6 +406,10 @@ local function ligar()
 	local jumpingFromSurface = false
 	local jumpSurfaceNormal = Vector3.new(0, 1, 0)
 	local currentAnim = ""
+	local stateTimer = 0
+
+	-- ★ Suavização da orientação do gyro
+	local smoothGyroCF = hrp.CFrame
 
 	task.wait(0.2)
 	tocarAnimacao("idle", 1)
@@ -446,14 +420,16 @@ local function ligar()
 		if not char or not char.Parent then return end
 		if not hrp or not hrp.Parent then return end
 
-		-- ★★★ FORÇA ESTADO PHYSICS A CADA FRAME ★★★
-		if hum:GetState() ~= Enum.HumanoidStateType.Physics then
-			hum:ChangeState(Enum.HumanoidStateType.Physics)
+		-- ★ CHECA ESTADO A CADA 0.5s (NÃO TODO FRAME)
+		stateTimer += dt
+		if stateTimer > 0.5 then
+			stateTimer = 0
+			if hum:GetState() ~= Enum.HumanoidStateType.Physics then
+				hum:ChangeState(Enum.HumanoidStateType.Physics)
+			end
+			hum.WalkSpeed = 0
+			hum.JumpPower = 0
 		end
-
-		-- Mantém valores zerados
-		hum.WalkSpeed = 0
-		hum.JumpPower = 0
 
 		local mx = mobileControls.getMoveX()
 		local mz = mobileControls.getMoveZ()
@@ -517,29 +493,28 @@ local function ligar()
 				isGrounded = true
 				verticalVelocity = 0
 				jumpingFromSurface = false
-
 				local stickForce = (hit.Position + hit.Normal * STICK_DIST - hrp.Position) * 10
 				bodyVel.Velocity = lateralVel + stickForce
 			else
 				isGrounded = false
 				if jumpingFromSurface then
-					verticalVelocity = verticalVelocity - GRAVITY * dt
+					verticalVelocity -= GRAVITY * dt
 					bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
 				else
-					verticalVelocity = verticalVelocity - GRAVITY * dt
+					verticalVelocity -= GRAVITY * dt
 					bodyVel.Velocity = lateralVel + surfaceNormal * verticalVelocity
 				end
 			end
 		else
 			isGrounded = false
 			if jumpingFromSurface then
-				verticalVelocity = verticalVelocity - GRAVITY * dt
+				verticalVelocity -= GRAVITY * dt
 				bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
 				if verticalVelocity < -JUMP_POWER * 2 then
 					jumpingFromSurface = false
 				end
 			else
-				verticalVelocity = verticalVelocity - GRAVITY * dt
+				verticalVelocity -= GRAVITY * dt
 				bodyVel.Velocity = lateralVel + Vector3.new(0, verticalVelocity, 0)
 				surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), dt * 5)
 			end
@@ -580,15 +555,14 @@ local function ligar()
 		end
 
 		if currentAnim == "walk" and animTracks["walk"] then
-			local speed = math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.5, 2)
-			animTracks["walk"]:AdjustSpeed(speed)
+			animTracks["walk"]:AdjustSpeed(math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.5, 2))
 		end
 
 		if animTracks[currentAnim] and not animTracks[currentAnim].IsPlaying then
 			tocarAnimacao(currentAnim, 1)
 		end
 
-		-- ★★★ ORIENTAÇÃO — corpo se alinha à superfície ★★★
+		-- ★★★ ORIENTAÇÃO SUAVIZADA ★★★
 		local upVec = surfaceNormal
 		local lookVec = currentForward
 
@@ -607,7 +581,12 @@ local function ligar()
 		end
 		lookVec = upVec:Cross(rightVec).Unit
 
-		bodyGyro.CFrame = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
+		local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
+
+		-- ★★★ SUAVIZA O GYRO — evita saltos bruscos ★★★
+		local lerpSpeed = math.min(dt * 12, 1)
+		smoothGyroCF = smoothGyroCF:Lerp(targetCF, lerpSpeed)
+		bodyGyro.CFrame = smoothGyroCF
 
 		-- CABEÇA
 		atualizarCabeca(char)
@@ -618,15 +597,8 @@ end
 -- DESLIGAR
 -- ==============================
 local function desligar()
-	if loop then
-		loop:Disconnect()
-		loop = nil
-	end
-
-	if mobileControls then
-		mobileControls.destroy()
-		mobileControls = nil
-	end
+	if loop then loop:Disconnect(); loop = nil end
+	if mobileControls then mobileControls.destroy(); mobileControls = nil end
 
 	limparAnimacoes()
 
@@ -636,22 +608,28 @@ local function desligar()
 		local hrp = char:FindFirstChild("HumanoidRootPart")
 
 		if hum then
-			-- ★★★ RESTAURA TODOS OS ESTADOS ★★★
-			hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
-			hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
-			hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
-			hum:SetStateEnabled(Enum.HumanoidStateType.Running, true)
-			hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, true)
-			hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
-			hum:SetStateEnabled(Enum.HumanoidStateType.Landed, true)
+			-- ★ RESTAURA TODOS OS ESTADOS
+			local estadosRestaurar = {
+				Enum.HumanoidStateType.GettingUp,
+				Enum.HumanoidStateType.FallingDown,
+				Enum.HumanoidStateType.Ragdoll,
+				Enum.HumanoidStateType.Running,
+				Enum.HumanoidStateType.RunningNoPhysics,
+				Enum.HumanoidStateType.Freefall,
+				Enum.HumanoidStateType.Landed,
+				Enum.HumanoidStateType.Jumping,
+				Enum.HumanoidStateType.Climbing,
+				Enum.HumanoidStateType.Swimming,
+			}
+			for _, estado in ipairs(estadosRestaurar) do
+				hum:SetStateEnabled(estado, true)
+			end
 
 			hum.PlatformStand = false
 			hum.WalkSpeed = savedWalkSpeed or 16
 			hum.JumpPower = savedJumpPower or 50
 			hum.JumpHeight = savedJumpHeight or 7.2
 			hum.AutoRotate = true
-
-			-- ★ Volta pro estado normal
 			hum:ChangeState(Enum.HumanoidStateType.GettingUp)
 		end
 
@@ -719,7 +697,7 @@ local function criarGUI()
 	title.Size = UDim2.new(1, 0, 0, 40)
 	title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 	title.BorderSizePixel = 0
-	title.Text = "🦎 LAGATIXA v12"
+	title.Text = "🦎 LAGATIXA v13"
 	title.TextColor3 = Color3.fromRGB(0, 200, 255)
 	title.TextSize = 18
 	title.Font = Enum.Font.GothamBold
@@ -776,4 +754,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA v12] Rotação + Animações ✓")
+print("[LAGATIXA v13] Sem tremor ✓")
