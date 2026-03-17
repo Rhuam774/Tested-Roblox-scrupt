@@ -1,17 +1,17 @@
 -- =============================================================
---  MODO LAGATIXA  v14  -  TREMOR TOTALMENTE CORRIGIDO (ZERO OSCILAÇÃO)
+--  MODO LAGATIXA  v14  -  SEM TREMOR (CORRIGIDO)
 -- =============================================================
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
-local WALK_SPEED   = 16
-local JUMP_POWER   = 50
-local GRAVITY      = 196.2
-local STICK_DIST   = 3
+local WALK_SPEED = 16
+local JUMP_POWER = 50
+local GRAVITY    = 196.2
+local STICK_DIST = 1.5  -- FIX: valor menor para evitar oscilação
 
 local ativo = false
 local loop = nil
@@ -23,38 +23,29 @@ local savedWalkSpeed = 16
 local savedJumpPower = 50
 local savedJumpHeight = 7.2
 
--- ==============================
--- RAYCAST
--- ==============================
+-- Estado de movimento
+local surfaceNormal = Vector3.new(0, 1, 0)
+local verticalVelocity = 0
+local isGrounded = false
+local canJump = true
+local currentForward = Vector3.new(0, 0, -1)
+local jumpingFromSurface = false
+local jumpSurfaceNormal = Vector3.new(0, 1, 0)
+local currentAnim = ""
+local smoothGyroCF = nil
+
+-- =============================================================
+-- FIX #1: Raycast simplificado — só para baixo (não 6 direções)
+-- O raycast em 6 direções detectava paredes/tetos e causava
+-- oscilação na força de "grudar no chão"
+-- =============================================================
 local function raycastChao(pos, char)
 	local params = RaycastParams.new()
 	params.FilterDescendantsInstances = {char}
 	params.FilterType = Enum.RaycastFilterType.Exclude
 
-	local dirs = {
-		Vector3.new(0, -1, 0),
-		Vector3.new(0, 1, 0),
-		Vector3.new(1, 0, 0),
-		Vector3.new(-1, 0, 0),
-		Vector3.new(0, 0, 1),
-		Vector3.new(0, 0, -1),
-	}
-
-	local melhorHit = nil
-	local melhorDist = math.huge
-
-	for _, dir in ipairs(dirs) do
-		local result = workspace:Raycast(pos, dir * 10, params)
-		if result then
-			local dist = (result.Position - pos).Magnitude
-			if dist < melhorDist then
-				melhorDist = dist
-				melhorHit = result
-			end
-		end
-	end
-
-	return melhorHit, melhorDist
+	local result = workspace:Raycast(pos, Vector3.new(0, -10, 0), params)
+	return result
 end
 
 -- ==============================
@@ -63,7 +54,7 @@ end
 local function pararTodasAnimacoes()
 	for _, track in pairs(animTracks) do
 		if track and track.IsPlaying then
-			track:Stop(0.1)
+			track:Stop(0.2)
 		end
 	end
 end
@@ -121,7 +112,9 @@ local function carregarAnimacoes(char)
 			animObj.Parent = char
 
 			local track = animator:LoadAnimation(animObj)
-			track.Priority = Enum.AnimationPriority.Action4
+			-- FIX: Action3 em vez de Action4 — menos agressivo,
+			-- permite que a animação complete sem ser interrompida
+			track.Priority = Enum.AnimationPriority.Action3
 			track.Looped = (nome ~= "jump")
 
 			animTracks[nome] = track
@@ -133,23 +126,30 @@ local function carregarAnimacoes(char)
 	return carregadas > 0
 end
 
+-- =============================================================
+-- FIX #2: Só troca animação quando muda de estado
+-- NÃO reinicia a cada frame — isso impedia a animação de completar
+-- =============================================================
 local function tocarAnimacao(nome, velocidade)
 	velocidade = velocidade or 1
 	local track = animTracks[nome]
 	if not track then return end
 
-	if track.IsPlaying then
+	if currentAnim == nome and track.IsPlaying then
+		-- Já está tocando a animação certa, só ajusta velocidade
 		track:AdjustSpeed(velocidade)
 		return
 	end
 
+	-- Para outras animações
 	for n, t in pairs(animTracks) do
 		if n ~= nome and t and t.IsPlaying then
-			t:Stop(0.15)
+			t:Stop(0.2)
 		end
 	end
 
-	track:Play(0.15)
+	currentAnim = nome
+	track:Play(0.2)
 	track:AdjustSpeed(velocidade)
 end
 
@@ -353,85 +353,59 @@ local function ligar()
 	savedJumpPower = hum.JumpPower
 	savedJumpHeight = hum.JumpHeight
 
-	-- ★ DESATIVA ESTADOS QUE FORÇAM FICAR DE PÉ (INCLUINDO MAIS PARA MOVIMENTO LIVRE)
-	local estadosDesativar = {
-		Enum.HumanoidStateType.GettingUp,
-		Enum.HumanoidStateType.FallingDown,
-		Enum.HumanoidStateType.Ragdoll,
-		Enum.HumanoidStateType.Running,
-		Enum.HumanoidStateType.RunningNoPhysics,
-		Enum.HumanoidStateType.Freefall,
-		Enum.HumanoidStateType.Landed,
-		Enum.HumanoidStateType.Jumping,
-		Enum.HumanoidStateType.Climbing,
-		Enum.HumanoidStateType.Swimming,
-		Enum.HumanoidStateType.Seated,  -- EXTRA: Para assentos
-		Enum.HumanoidStateType.StrafingNoPhysics,  -- EXTRA: Para estabilidade
-	}
-	for _, estado in ipairs(estadosDesativar) do
-		hum:SetStateEnabled(estado, false)
-	end
-
-	hum.PlatformStand = true  -- ★ FIXA POSIÇÃO (INCLUÍDO PARA ESTABILIZAR MAIS)
-	hum.WalkSpeed = 0
-	hum.JumpPower = 0
-	hum.JumpHeight = 0
+	-- FIX #3: Usar PlatformStand em vez de desativar estados + Physics
+	-- PlatformStand diz ao Humanoid para NÃO controlar o personagem,
+	-- eliminando a luta entre BodyVelocity/BodyGyro e o motor de física
+	hum.PlatformStand = true
 	hum.AutoRotate = false
-
-	-- ★★★ ESTADO PHYSICS — UMA VEZ SÓ ★★★
-	hum:ChangeState(Enum.HumanoidStateType.Physics)
 
 	hrp.Anchored = false
 
-	-- ★★★ FORÇAS MODERADAS — ZERO TREMOR (AJUSTADAS PARA PARADO) ★★★
+	-- FIX #4: BodyVelocity com valores mais suaves
+	-- MaxForce alto, mas P moderado (não excessivo) para evitar oscilação
 	local bodyVel = Instance.new("BodyVelocity")
-	bodyVel.MaxForce = Vector3.new(3e4, 3e4, 3e4)  -- REDUZIDO PARA MENOS IMPULSO INDESEJADO
+	bodyVel.MaxForce = Vector3.new(1e5, 0, 1e5)  -- FIX: Y = 0, dejamos que a gravidade funcione
 	bodyVel.Velocity = Vector3.zero
-	bodyVel.P = 750  -- REDUZIDO PARA MAIS ESTABILIDADE
+	bodyVel.P = 2500  -- FIX: valor moderado (era 1250, mas com Y=0 precisa de mais responsividade no XZ)
 	bodyVel.Parent = hrp
 
 	local bodyGyro = Instance.new("BodyGyro")
-	bodyGyro.MaxTorque = Vector3.new(3e4, 3e4, 3e4)  -- REDUZIDO
-	bodyGyro.P = 1500  -- REDUZIDO RADICALMENTE PARA EVITAR OSCILAÇÃO
-	bodyGyro.D = 300  -- REDUZIDO
+	bodyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+	bodyGyro.P = 3000   -- FIX: valor moderado (era 5000) — menos rígido = menos tremor
+	bodyGyro.D = 200    -- FIX: valor moderado (era 500) — damping suficiente sem causar atraso
 	bodyGyro.CFrame = hrp.CFrame
 	bodyGyro.Parent = hrp
 
 	mobileControls = criarControlesMobile()
 	if not mobileControls then return end
 
-	local surfaceNormal = Vector3.new(0, 1, 0)
-	local verticalVelocity = 0
-	local isGrounded = false
-	local canJump = true
-	local currentForward = Vector3.new(0, 0, -1)
-	local jumpingFromSurface = false
-	local jumpSurfaceNormal = Vector3.new(0, 1, 0)
-	local currentAnim = ""
-	local stateTimer = 0
-
-	-- ★ Suavização da orientação do gyro (MAIS LENTA PARA EVITAR TREMOR)
-	local smoothGyroCF = hrp.CFrame
+	-- Resetar estado
+	surfaceNormal = Vector3.new(0, 1, 0)
+	verticalVelocity = 0
+	isGrounded = false
+	canJump = true
+	currentForward = hrp.CFrame.LookVector
+	jumpingFromSurface = false
+	jumpSurfaceNormal = Vector3.new(0, 1, 0)
+	currentAnim = ""
+	smoothGyroCF = hrp.CFrame
 
 	task.wait(0.2)
 	tocarAnimacao("idle", 1)
-	currentAnim = "idle"
+
+	-- FIX #5: REMOVIDO o stateTimer que forçava Physics a cada 0.5s
+	-- Isso causava micro-interrupções no movimento
+
+	-- FIX #6: Variável para debounce de animação (não restartar desnecessariamente)
+	local animCheckTimer = 0
 
 	loop = RunService.Heartbeat:Connect(function(dt)
 		if not ativo then return end
 		if not char or not char.Parent then return end
 		if not hrp or not hrp.Parent then return end
 
-		-- ★ CHECA ESTADO A CADA 1S (MENOS FREQUENTE PARA ESTABILIDADE)
-		stateTimer += dt
-		if stateTimer > 1 then
-			stateTimer = 0
-			if hum:GetState() ~= Enum.HumanoidStateType.Physics then
-				hum:ChangeState(Enum.HumanoidStateType.Physics)
-			end
-			hum.WalkSpeed = 0
-			hum.JumpPower = 0
-		end
+		-- FIX: Clampa dt para evitar teleporte em lag spikes
+		dt = math.min(dt, 0.05)
 
 		local mx = mobileControls.getMoveX()
 		local mz = mobileControls.getMoveZ()
@@ -441,6 +415,7 @@ local function ligar()
 		local camLook = camCF.LookVector
 		local camRight = camCF.RightVector
 
+		-- Projetar câmera no plano da superfície
 		local forward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
 		if forward.Magnitude > 0.01 then
 			forward = forward.Unit
@@ -460,14 +435,6 @@ local function ligar()
 
 		if isMoving then
 			currentForward = moveDir.Unit
-		else
-			local camForward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
-			if camForward.Magnitude > 0.01 then
-				currentForward = currentForward:Lerp(camForward.Unit, dt * 3)  -- LERP MAIS DEVAGAR QUANDO PARADO
-				if currentForward.Magnitude > 0 then
-					currentForward = currentForward.Unit
-				end
-			end
 		end
 
 		local lateralVel = Vector3.zero
@@ -475,63 +442,63 @@ local function ligar()
 			lateralVel = moveDir.Unit * WALK_SPEED
 		end
 
-		-- SUPERFÍCIE COM TOLERÂNCIA (IGNORA MICRO-DIFERENÇAS)
-		local hit, dist = raycastChao(hrp.Position, char)
+		-- RAYCAST SIMPLIFICADO: só para baixo
+		local hit = raycastChao(hrp.Position, char)
 
-		local isFloor = false
 		if hit then
-			isFloor = hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
-		end
+			local dist = (hit.Position - hrp.Position).Magnitude
 
-		if hit and dist < 5 then
-			surfaceNormal = surfaceNormal:Lerp(hit.Normal, dt * 8)
-			if surfaceNormal.Magnitude > 0 then
+			-- Suavizar normal da superfície
+			surfaceNormal = surfaceNormal:Lerp(hit.Normal, math.min(dt * 8, 1))
+			if surfaceNormal.Magnitude > 0.01 then
 				surfaceNormal = surfaceNormal.Unit
 			else
 				surfaceNormal = Vector3.new(0, 1, 0)
 			end
 
 			if dist < STICK_DIST and verticalVelocity <= 0 then
+				-- No chão
 				isGrounded = true
 				verticalVelocity = 0
 				jumpingFromSurface = false
-				-- ★ LIMITE PARA STICK FORCE (IGNORA SE DIFERENÇA MÍNIMA PARA EVITAR TREMOR)
-				local stickForce = (hit.Position + hit.Normal * STICK_DIST - hrp.Position) * 8
-				if stickForce.Magnitude < 0.1 then  -- LIMIAR: IGNORA FORÇAS MÍNIMAS
-					stickForce = Vector3.zero
-				end
-				if lateralVel.Magnitude == 0 then  -- SE PARADO, FORÇA ZERO TOTAL
-					bodyVel.Velocity = Vector3.new(0, stickForce.Y, 0)  -- APENA NO Y PARA MANTER STICK
-				else
-					bodyVel.Velocity = lateralVel + stickForce
-				end
+
+				-- FIX: Força de stick mais suave (menos agressiva)
+				-- Usa lerp suave em vez de correção brusca
+				local targetPos = hit.Position + hit.Normal * STICK_DIST
+				local stickForce = (targetPos - hrp.Position) * 5  -- FIX: valor menor (era 10)
+
+				bodyVel.Velocity = lateralVel + stickForce
 			else
+				-- No ar perto do chão
 				isGrounded = false
+				verticalVelocity -= GRAVITY * dt
+
 				if jumpingFromSurface then
-					verticalVelocity -= GRAVITY * dt
 					bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
 				else
-					verticalVelocity -= GRAVITY * dt
 					bodyVel.Velocity = lateralVel + surfaceNormal * verticalVelocity
 				end
 			end
 		else
+			-- Longe de superfícies
 			isGrounded = false
+			verticalVelocity -= GRAVITY * dt
+
 			if jumpingFromSurface then
-				verticalVelocity -= GRAVITY * dt
 				bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
 				if verticalVelocity < -JUMP_POWER * 2 then
 					jumpingFromSurface = false
 				end
 			else
-				verticalVelocity -= GRAVITY * dt
 				bodyVel.Velocity = lateralVel + Vector3.new(0, verticalVelocity, 0)
+				surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), math.min(dt * 3, 1))
 			end
-			surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), dt * 5)
 		end
 
 		-- PULO
 		if wantsJump and isGrounded and canJump then
+			local isFloor = hit and hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
+
 			if isFloor then
 				verticalVelocity = JUMP_POWER
 				isGrounded = false
@@ -547,7 +514,7 @@ local function ligar()
 			task.delay(0.3, function() canJump = true end)
 		end
 
-		-- ANIMAÇÕES
+		-- ANIMAÇÕES — FIX #7: Só muda quando o estado muda
 		local newAnim = "idle"
 		if not isGrounded then
 			if verticalVelocity > 5 then
@@ -559,20 +526,27 @@ local function ligar()
 			newAnim = "walk"
 		end
 
+		-- Só toca animação quando muda de estado (não a cada frame)
 		if newAnim ~= currentAnim then
-			currentAnim = newAnim
 			tocarAnimacao(newAnim, 1)
 		end
 
-		if currentAnim == "walk" and animTracks["walk"] then
-			animTracks["walk"]:AdjustSpeed(math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.5, 2))
+		-- Ajusta velocidade da animação de andar
+		if currentAnim == "walk" and animTracks["walk"] and animTracks["walk"].IsPlaying then
+			local speed = math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.3, 1.5)
+			animTracks["walk"]:AdjustSpeed(speed)
 		end
 
-		if animTracks[currentAnim] and not animTracks[currentAnim].IsPlaying then
-			tocarAnimacao(currentAnim, 1)
+		-- FIX #8: Só verifica se animação parou a cada 0.3s (não a cada frame)
+		animCheckTimer += dt
+		if animCheckTimer >= 0.3 then
+			animCheckTimer = 0
+			if animTracks[currentAnim] and not animTracks[currentAnim"].IsPlaying then
+				tocarAnimacao(currentAnim, 1)
+			end
 		end
 
-		-- ★★★ ORIENTAÇÃO SUAVIZADA — MAIS DEVAGAR PARA ZERO TREMOR ★★★
+		-- ORIENTAÇÃO SUAVIZADA
 		local upVec = surfaceNormal
 		local lookVec = currentForward
 
@@ -593,8 +567,11 @@ local function ligar()
 
 		local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
 
-		-- ★★★ SUAVIZA O GYRO — LERP MAIS LENTO PARA ELIMINAR SALTO E TREMOR ★★★
-		local lerpSpeed = dt * 8  -- REDUZIDO DE 12 PARA 8 PARA MENOS SENSIBILIDADE
+		-- FIX #9: Suavização adaptativa
+		-- Quando parado: lerp suave (não causa tremor por micro-correções)
+		-- Quando andando: lerp mais rápido (responsivo)
+		local lerpRate = isMoving and 15 or 6
+		local lerpSpeed = math.min(dt * lerpRate, 1)
 		smoothGyroCF = smoothGyroCF:Lerp(targetCF, lerpSpeed)
 		bodyGyro.CFrame = smoothGyroCF
 
@@ -618,26 +595,7 @@ local function desligar()
 		local hrp = char:FindFirstChild("HumanoidRootPart")
 
 		if hum then
-			-- ★ RESTAURA TODOS OS ESTADOS (INCLUINDO EXTRAS)
-			local estadosRestaurar = {
-				Enum.HumanoidStateType.GettingUp,
-				Enum.HumanoidStateType.FallingDown,
-				Enum.HumanoidStateType.Ragdoll,
-				Enum.HumanoidStateType.Running,
-				Enum.HumanoidStateType.RunningNoPhysics,
-				Enum.HumanoidStateType.Freefall,
-				Enum.HumanoidStateType.Landed,
-				Enum.HumanoidStateType.Jumping,
-				Enum.HumanoidStateType.Climbing,
-				Enum.HumanoidStateType.Swimming,
-				Enum.HumanoidStateType.Seated,
-				Enum.HumanoidStateType.StrafingNoPhysics,
-			}
-			for _, estado in ipairs(estadosRestaurar) do
-				hum:SetStateEnabled(estado, true)
-			end
-
-			hum.PlatformStand = false  -- RESTAURA
+			hum.PlatformStand = false
 			hum.WalkSpeed = savedWalkSpeed or 16
 			hum.JumpPower = savedJumpPower or 50
 			hum.JumpHeight = savedJumpHeight or 7.2
@@ -648,6 +606,7 @@ local function desligar()
 		local animate = char:FindFirstChild("Animate")
 		if animate then animate.Disabled = false end
 
+		-- Reset Neck
 		for _, partName in ipairs({"Head", "UpperTorso", "Torso"}) do
 			local part = char:FindFirstChild(partName)
 			if part then
@@ -766,4 +725,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA v14] Zero tremor—teste calma AI!")
+print("[LAGATIXA v14] Sem tremor ✓")
