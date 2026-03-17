@@ -1,5 +1,6 @@
+
 -- =============================================================
---  MODO LAGATIXA  v10  -  VERSÃO MOBILE COMPLETA
+--  MODO LAGATIXA  v10.1  -  VERSÃO MOBILE COMPLETA (CORRIGIDO)
 -- =============================================================
 
 local Players          = game:GetService("Players")
@@ -24,6 +25,7 @@ local ativo = false
 local loop = nil
 local mobileControls = nil
 local animTracks = {}
+local animInstances = {}  -- ← NOVO: guarda as Animation instances vivas
 
 -- ==============================
 -- RAYCAST SIMPLES
@@ -60,63 +62,122 @@ local function raycastChao(pos, char)
 end
 
 -- ==============================
--- SISTEMA DE ANIMAÇÕES
+-- SISTEMA DE ANIMAÇÕES (CORRIGIDO)
 -- ==============================
 local function pararTodasAnimacoes()
 	for nome, track in pairs(animTracks) do
 		if track and track.IsPlaying then
-			track:Stop(0.2)
+			track:Stop(0.1)
 		end
 	end
 end
 
+local function limparAnimacoes()
+	pararTodasAnimacoes()
+	animTracks = {}
+	for _, inst in ipairs(animInstances) do
+		if inst and inst.Parent then
+			inst:Destroy()
+		end
+	end
+	animInstances = {}
+end
+
 local function carregarAnimacoes(char)
 	local hum = char:FindFirstChildOfClass("Humanoid")
-	if not hum then return end
+	if not hum then
+		warn("[LAGATIXA] Humanoid não encontrado!")
+		return
+	end
 
-	animTracks = {}
+	limparAnimacoes()
 
-	-- IDs de animação padrão do Roblox (R15)
-	local anims = {
-		idle = "rbxassetid://180435571",
-		walk = "rbxassetid://180426354",
-		jump = "rbxassetid://125750702",
-		fall = "rbxassetid://180436148",
-	}
+	-- ★ USA ANIMATOR (não deprecado)
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = hum
+	end
+
+	-- ★ PARA TODAS AS ANIMAÇÕES EXISTENTES DO ANIMATOR
+	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+		track:Stop(0)
+	end
+
+	-- ★ DETECTA R6 vs R15 e usa IDs corretas
+	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
+
+	local anims
+	if isR6 then
+		anims = {
+			idle = "rbxassetid://180435571",
+			walk = "rbxassetid://180426354",
+			jump = "rbxassetid://125750702",
+			fall = "rbxassetid://180436148",
+		}
+		print("[LAGATIXA] Rig detectado: R6")
+	else
+		anims = {
+			idle = "rbxassetid://507766666",
+			walk = "rbxassetid://507777826",
+			jump = "rbxassetid://507765000",
+			fall = "rbxassetid://507767968",
+		}
+		print("[LAGATIXA] Rig detectado: R15")
+	end
 
 	for nome, id in pairs(anims) do
 		local ok, err = pcall(function()
 			local animObj = Instance.new("Animation")
 			animObj.AnimationId = id
-			local track = hum:LoadAnimation(animObj)
+			animObj.Name = "Lagatixa_" .. nome
+			-- ★ NÃO DESTRÓI — mantém viva dentro do char
+			animObj.Parent = char
+
+			local track = animator:LoadAnimation(animObj)
+			-- ★ PRIORIDADE ALTA para sobrescrever qualquer outra
+			track.Priority = Enum.AnimationPriority.Action
+			track.Looped = (nome == "idle" or nome == "walk" or nome == "fall")
+
 			animTracks[nome] = track
-			animObj:Destroy()
+			table.insert(animInstances, animObj)
+
+			print("[LAGATIXA] Animação carregada: " .. nome .. " (" .. id .. ")")
 		end)
 		if not ok then
-			warn("[LAGATIXA] Erro ao carregar animação " .. nome .. ": " .. tostring(err))
+			warn("[LAGATIXA] ERRO ao carregar animação " .. nome .. ": " .. tostring(err))
 		end
 	end
+
+	-- ★ Espera um frame pra garantir que as animações estejam prontas
+	task.wait()
+
+	print("[LAGATIXA] Total de animações carregadas: " .. tostring(#animInstances))
 end
 
 local function tocarAnimacao(nome, velocidade)
 	velocidade = velocidade or 1
 
 	local track = animTracks[nome]
-	if not track then return end
+	if not track then
+		return
+	end
 
+	-- Se já está tocando, só ajusta velocidade
 	if track.IsPlaying then
 		track:AdjustSpeed(velocidade)
 		return
 	end
 
-	-- Para outras animações
+	-- ★ PARA TODAS as outras animações ANTES de tocar a nova
 	for n, t in pairs(animTracks) do
 		if n ~= nome and t and t.IsPlaying then
-			t:Stop(0.2)
+			t:Stop(0.15)
 		end
 	end
 
-	track:Play(0.2)
+	-- ★ Pequeno delay pra garantir que as outras pararam
+	track:Play(0.15)
 	track:AdjustSpeed(velocidade)
 end
 
@@ -284,7 +345,6 @@ end
 local function atualizarCabeca(char, surfaceNormal)
 	local neck = nil
 
-	-- Procura o Motor6D do pescoço
 	local head = char:FindFirstChild("Head")
 	if head then
 		for _, obj in ipairs(head:GetChildren()) do
@@ -296,7 +356,6 @@ local function atualizarCabeca(char, surfaceNormal)
 	end
 
 	if not neck then
-		-- Tenta achar no UpperTorso (R15)
 		local upperTorso = char:FindFirstChild("UpperTorso")
 		if upperTorso then
 			for _, obj in ipairs(upperTorso:GetChildren()) do
@@ -309,7 +368,6 @@ local function atualizarCabeca(char, surfaceNormal)
 	end
 
 	if not neck then
-		-- Tenta no Torso (R6)
 		local torso = char:FindFirstChild("Torso")
 		if torso then
 			for _, obj in ipairs(torso:GetChildren()) do
@@ -326,31 +384,27 @@ local function atualizarCabeca(char, surfaceNormal)
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
 
-	-- Direção da câmera relativa ao corpo
 	local camLook = camera.CFrame.LookVector
 
-	-- Converte para espaço local do torso
 	local torsoParent = neck.Part0
 	if not torsoParent then return end
 
 	local torsoCF = torsoParent.CFrame
 	local localLook = torsoCF:VectorToObjectSpace(camLook)
 
-	-- Calcula ângulos
 	local yaw = math.atan2(-localLook.X, -localLook.Z)
 	local pitch = math.asin(math.clamp(localLook.Y, -1, 1))
 
-	-- Limita os ângulos para não parecer estranho
 	yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
 	pitch = math.clamp(pitch, -math.rad(60), math.rad(60))
 
-	-- Aplica no C0 do Neck (preservando a posição original)
-	local originalC0 = CFrame.new(0, 1, 0) -- Posição padrão R15
-	
-	-- Detecta se é R6
 	local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
+
+	local originalC0
 	if isR6 then
 		originalC0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+	else
+		originalC0 = CFrame.new(0, 1, 0)
 	end
 
 	local rotacao = CFrame.Angles(pitch, yaw, 0)
@@ -369,18 +423,24 @@ local function ligar()
 
 	if not hrp or not hum then return end
 
-	-- Para animações padrão do Roblox
+	-- ★ DESLIGA O ANIMATE PRIMEIRO
 	local animate = char:FindFirstChild("Animate")
 	if animate then
 		animate.Disabled = true
 	end
 
-	-- Para todas as animações atuais
-	for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-		track:Stop(0)
+	-- ★ PARA TODAS as animações atuais via Animator
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if animator then
+		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			track:Stop(0)
+		end
 	end
 
-	-- Carrega nossas animações
+	-- ★ Espera um pouco pra tudo parar
+	task.wait(0.1)
+
+	-- ★ CARREGA NOSSAS ANIMAÇÕES
 	carregarAnimacoes(char)
 
 	hum.PlatformStand = true
@@ -412,9 +472,13 @@ local function ligar()
 	local jumpingFromSurface = false
 	local jumpSurfaceNormal = Vector3.new(0, 1, 0)
 
-	-- Estado da animação
-	local currentAnim = "idle"
-	local wasGrounded = true
+	local currentAnim = ""  -- ★ Começa vazio pra forçar a primeira animação
+	local animTimer = 0
+
+	-- ★ Toca idle imediatamente
+	task.wait(0.2)
+	tocarAnimacao("idle", 1)
+	currentAnim = "idle"
 
 	loop = RunService.Heartbeat:Connect(function(dt)
 		if not ativo then return end
@@ -430,7 +494,6 @@ local function ligar()
 		local camLook = camCF.LookVector
 		local camRight = camCF.RightVector
 
-		-- Projeta na superfície
 		local forward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
 		if forward.Magnitude > 0.01 then
 			forward = forward.Unit
@@ -451,7 +514,6 @@ local function ligar()
 		if isMoving then
 			currentForward = moveDir.Unit
 		else
-			-- QUANDO PARADO: corpo olha na direção da câmera (projetada na superfície)
 			local camForward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
 			if camForward.Magnitude > 0.01 then
 				currentForward = currentForward:Lerp(camForward.Unit, dt * 5)
@@ -541,7 +603,7 @@ local function ligar()
 		end
 
 		-- ============================
-		-- ANIMAÇÕES
+		-- ★ ANIMAÇÕES (CORRIGIDO)
 		-- ============================
 		local newAnim = "idle"
 
@@ -557,15 +619,36 @@ local function ligar()
 			newAnim = "idle"
 		end
 
+		-- ★ SÓ TROCA SE MUDOU
 		if newAnim ~= currentAnim then
 			currentAnim = newAnim
-			tocarAnimacao(newAnim, 1)
+
+			-- ★ Velocidade baseada no tipo
+			local speed = 1
+			if newAnim == "walk" then
+				speed = math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.5, 2)
+			end
+
+			tocarAnimacao(newAnim, speed)
 		end
 
-		-- Ajusta velocidade da animação de andar
-		if currentAnim == "walk" then
-			local speed = lateralVel.Magnitude / WALK_SPEED
-			tocarAnimacao("walk", math.clamp(speed, 0.5, 2))
+		-- ★ ATUALIZA VELOCIDADE DO WALK CONTINUAMENTE
+		if currentAnim == "walk" and animTracks["walk"] then
+			local speed = math.clamp(lateralVel.Magnitude / WALK_SPEED, 0.5, 2)
+			if animTracks["walk"].IsPlaying then
+				animTracks["walk"]:AdjustSpeed(speed)
+			else
+				-- ★ Se parou de tocar sozinha, força de novo
+				tocarAnimacao("walk", speed)
+			end
+		end
+
+		-- ★ VERIFICA SE ANIMAÇÃO ATUAL AINDA ESTÁ TOCANDO
+		-- (proteção contra animações que param sozinhas)
+		if animTracks[currentAnim] and not animTracks[currentAnim].IsPlaying then
+			if currentAnim == "idle" or currentAnim == "walk" or currentAnim == "fall" then
+				tocarAnimacao(currentAnim, 1)
+			end
 		end
 
 		-- ============================
@@ -596,8 +679,6 @@ local function ligar()
 		-- CABEÇA OLHA PRA CÂMERA
 		-- ============================
 		atualizarCabeca(char, surfaceNormal)
-
-		wasGrounded = isGrounded
 	end)
 end
 
@@ -615,9 +696,8 @@ local function desligar()
 		mobileControls = nil
 	end
 
-	-- Para animações
-	pararTodasAnimacoes()
-	animTracks = {}
+	-- ★ LIMPA ANIMAÇÕES COMPLETAMENTE
+	limparAnimacoes()
 
 	local char = player.Character
 	if char then
@@ -639,7 +719,6 @@ local function desligar()
 			if not parent then return end
 			for _, obj in ipairs(parent:GetChildren()) do
 				if obj:IsA("Motor6D") and obj.Name == "Neck" then
-					-- Detecta R6
 					local isR6 = char:FindFirstChild("Torso") ~= nil and char:FindFirstChild("UpperTorso") == nil
 					if isR6 then
 						obj.C0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
@@ -653,6 +732,13 @@ local function desligar()
 		resetNeck(char:FindFirstChild("Head"))
 		resetNeck(char:FindFirstChild("UpperTorso"))
 		resetNeck(char:FindFirstChild("Torso"))
+
+		-- ★ Remove Animation instances que ficaram no char
+		for _, obj in ipairs(char:GetChildren()) do
+			if obj:IsA("Animation") and obj.Name:find("Lagatixa_") then
+				obj:Destroy()
+			end
+		end
 
 		if hrp then
 			for _, obj in ipairs(hrp:GetChildren()) do
@@ -693,7 +779,7 @@ local function criarGUI()
 	title.Size = UDim2.new(1, 0, 0, 40)
 	title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 	title.BorderSizePixel = 0
-	title.Text = "🦎 LAGATIXA v10"
+	title.Text = "🦎 LAGATIXA v10.1"
 	title.TextColor3 = Color3.fromRGB(0, 200, 255)
 	title.TextSize = 18
 	title.Font = Enum.Font.GothamBold
@@ -756,4 +842,4 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-print("[LAGATIXA v10] Pronto! Setas + Animações + Cabeça livre")
+print("[LAGATIXA v10.1] Pronto! Animações corrigidas ✓")
