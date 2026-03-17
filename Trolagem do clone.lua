@@ -130,8 +130,11 @@ local function ligar()
         local c = player.Character
         if not c then return end
         local h = c:FindFirstChild("HumanoidRootPart")
-        local u = c:FindFirstChildOfClass("Humanoid")
+        local u = u or c:FindFirstChildOfClass("Humanoid")
         if not h or not u then return end
+
+        -- Sincroniza myPos com a posicao real do HRP para evitar drift/travamento
+        myPos = h.Position
 
         local mX, mZ = 0, 0
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then mZ = -1 end
@@ -154,6 +157,9 @@ local function ligar()
 
         local velLateral = Vector3.zero
         if mX ~= 0 or mZ ~= 0 then
+            -- Note: -mZ para W ser frente (mZ = -1 -> -(-1) = 1)
+            -- Mas no Roblox o LookVector jah aponta para frente.
+            -- Vamos garantir que a direcao seja consistente.
             local dir = fwd * (-mZ) + rgt * mX
             if dir.Magnitude > 0 then
                 velLateral = dir.Unit * WALK_SPEED
