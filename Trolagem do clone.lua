@@ -1,7 +1,7 @@
 -- =============================================================
---  MODO LAGATIXA  v7  -  ULTRA ROBUSTO
---  Delta Executor / KRNL / Synapse Z
---  Detecção Multi-ponto + Suavização de Cantos + Auto-Respawn
+--  MODO LAGATIXA  v6  -  Delta Executor
+--  Movimento manual na superfície (parede/teto/chão)
+--  Direção baseada na Câmera + Animação de Andar
 -- =============================================================
 
 local Players          = game:GetService("Players")
@@ -13,26 +13,24 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 -- ==============================
--- CONFIGURAÇÕES AVANÇADAS
+-- CONSTANTES
 -- ==============================
-local WALK_SPEED    = 17
-local JUMP_POWER    = 60
-local GRAV_ACCEL    = 90
-local STICKY_FORCE  = 120   -- Força que "puxa" para a superfície
-local LAND_DIST     = 3.1
-local RAY_DIST      = 10
-local LERP_SPEED    = 15    -- Velocidade de rotação/alinhamento
-local LOOK_AHEAD    = 4     -- Distância para prever quinas
+local WALK_SPEED   = 16
+local JUMP_POWER   = 55
+local GRAV_ACCEL   = 80
+local LAND_DIST    = 3.1
+local RAY_DIST     = 9
+local NORMAL_SPEED = 12
 
-local WALK_ANIM_ID = "rbxassetid://180435571" -- Pode ser trocado por qualquer ID de animação de andar
+-- ID da animação de andar (padrão do Roblox)
+local WALK_ANIM_ID = "rbxassetid://180435571" -- "OldSchool" ou similar, pode ser trocado
 
 -- ==============================
--- ESTADO GLOBAL
+-- ESTADO
 -- ==============================
 local ativo      = false
 local loop       = nil
 local animTrack  = nil
-local connections = {}
 
 local myPos      = Vector3.zero
 local myNormal   = Vector3.new(0, 1, 0)
@@ -41,71 +39,54 @@ local noChao     = false
 local pulando    = false
 
 -- ==============================
--- UTILITÁRIOS DE DETECÇÃO (MULTI-PONTO)
+-- RAYCAST
 -- ==============================
-local function castRay(pos, dir, params)
-    local res = workspace:Raycast(pos, dir * RAY_DIST, params)
-    return res
-end
-
-local function detectarRobusto(hrp, normal)
+local function detectar(hrp, normal)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { player.Character }
 
     local pos = hrp.Position
     local cf = hrp.CFrame
-    
-    -- Pontos de amostragem (centro + 4 cantos do HRP)
-    local offsets = {
-        Vector3.zero,
-        cf.RightVector * 1.5,
-        -cf.RightVector * 1.5,
-        cf.LookVector * 1.5,
-        -cf.LookVector * 1.5
+    local dirs = {
+        -normal,
+        -cf.UpVector,
+         cf.UpVector,
+         cf.LookVector,
+        -cf.LookVector,
+         cf.RightVector,
+        -cf.RightVector,
     }
 
-    local sumNormal = Vector3.zero
-    local hitCount  = 0
-    local bestPt    = nil
-    local minDist   = math.huge
+    local bestDist = math.huge
+    local bestNorm = nil
+    local bestPt   = nil
 
-    for _, offset in ipairs(offsets) do
-        local origin = pos + offset
-        -- Tenta 3 direções por ponto: baixo local, normal invertida e lookahead se estiver movendo
-        local dirs = { -normal, -cf.UpVector }
-        
-        for _, dir in ipairs(dirs) do
-            local res = castRay(origin, dir, params)
-            if res then
-                sumNormal = sumNormal + res.Normal
-                hitCount = hitCount + 1
-                local d = (res.Position - pos).Magnitude
-                if d < minDist then
-                    minDist = d
-                    bestPt = res.Position
-                end
-                break -- Já achou superfície para este ponto
+    for _, dir in ipairs(dirs) do
+        local res = workspace:Raycast(pos, dir * RAY_DIST, params)
+        if res then
+            local d = (res.Position - pos).Magnitude
+            if d < bestDist then
+                bestDist = d
+                bestNorm = res.Normal
+                bestPt   = res.Position
             end
         end
     end
-
-    if hitCount > 0 then
-        return (sumNormal / hitCount).Unit, minDist, bestPt
-    end
-    return nil, nil, nil
+    return bestNorm, bestDist, bestPt
 end
 
 -- ==============================
--- ORIENTAÇÃO (CFRAME)
+-- CFRAME: Alinha o personagem à superfície e rotaciona com a câmera
 -- ==============================
-local function getFinalCF(pos, normal, camLook)
+local function makeCF(pos, normal, camLook)
+    -- Projeta o LookVector no plano da superfície
     local fwd = camLook - camLook:Dot(normal) * normal
-    if fwd.Magnitude < 0.001 then
+    if fwd.Magnitude < 0.01 then
         fwd = camera.CFrame.RightVector
         fwd = fwd - fwd:Dot(normal) * normal
     end
-    if fwd.Magnitude < 0.001 then
+    if fwd.Magnitude < 0.01 then
         local arb = math.abs(normal.Y) < 0.9 and Vector3.new(0,1,0) or Vector3.new(1,0,0)
         fwd = arb - arb:Dot(normal) * normal
     end
@@ -116,15 +97,8 @@ local function getFinalCF(pos, normal, camLook)
 end
 
 -- ==============================
--- VIDA E ANIMAÇÃO
+-- ANIMAÇÕES
 -- ==============================
-local function stopEverything()
-    if loop then loop:Disconnect(); loop = nil end
-    if animTrack then animTrack:Stop(); animTrack = nil end
-    for _, c in pairs(connections) do c:Disconnect() end
-    connections = {}
-end
-
 local function loadAnim(hum)
     local anim = Instance.new("Animation")
     anim.AnimationId = WALK_ANIM_ID
@@ -133,76 +107,106 @@ local function loadAnim(hum)
     animTrack.Looped = true
 end
 
+local function stopAnim()
+    if animTrack then
+        animTrack:Stop()
+        animTrack = nil
+    end
+end
+
 -- ==============================
--- NÚCLEO DO MOVIMENTO (LIGAR)
+-- LIGAR
 -- ==============================
 local function ligar()
     local char = player.Character or player.CharacterAdded:Wait()
-    local hrp  = char:WaitForChild("HumanoidRootPart", 5)
-    local hum  = char:WaitForChild("Humanoid", 5)
+    local hrp  = char:FindFirstChild("HumanoidRootPart")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
 
-    stopEverything()
     hum.PlatformStand = true
     loadAnim(hum)
 
     myPos    = hrp.Position
     myNormal = Vector3.new(0, 1, 0)
     myVelN   = 0
+    noChao   = false
+    pulando  = false
 
     loop = RunService.Heartbeat:Connect(function(dt)
         if not ativo then return end
+        
         local c = player.Character
         local h = c and c:FindFirstChild("HumanoidRootPart")
         local u = c and c:FindFirstChildOfClass("Humanoid")
-        if not h or not u or u.Health <= 0 then return end
+        if not h or not u then return end
 
-        -- 1. DETECÇÃO ROBUSTA
-        local norm, dist, pt = detectarRobusto(h, myNormal)
+        -- 1. DETECÇÃO
+        local norm, dist, pt = detectar(h, myNormal)
 
-        -- 2. MOVIMENTO WASD
-        local moveInput = Vector3.zero
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveInput = moveInput + camera.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveInput = moveInput - camera.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveInput = moveInput - camera.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveInput = moveInput + camera.CFrame.RightVector end
+        -- 2. GRAVIDADE
+        myVelN = myVelN - GRAV_ACCEL * dt
 
-        local velLateral = Vector3.zero
-        if moveInput.Magnitude > 0.01 then
-            -- Projeta na superfície atual
-            local dir = moveInput - moveInput:Dot(myNormal) * myNormal
-            if dir.Magnitude > 0.01 then
-                velLateral = dir.Unit * WALK_SPEED
+        -- 3. MOVIMENTO WASD (Intuitivo com a Câmera)
+        local mX, mZ = 0, 0
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then mZ = -1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then mZ =  1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then mX = -1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then mX =  1 end
+
+        -- Direções da câmera (LookVector e RightVector)
+        local camCF = camera.CFrame
+        local cLook = camCF.LookVector
+        local cRgt  = camCF.RightVector
+
+        -- Projeção no plano da superfície
+        local moveDir = Vector3.zero
+        if mZ ~= 0 or mX ~= 0 then
+            -- Para o W e S, usamos o LookVector (mesmo que aponte para cima/baixo)
+            -- Para o A e D, o RightVector
+            local dirW = cLook * (-mZ)
+            local dirA = cRgt * mX
+            moveDir = (dirW + dirA)
+            
+            -- Removemos a componente da normal para garantir que estamos no plano
+            moveDir = moveDir - moveDir:Dot(myNormal) * myNormal
+            if moveDir.Magnitude > 0.01 then
+                moveDir = moveDir.Unit * WALK_SPEED
             end
         end
 
-        -- 3. GRAVIDADE E ADERÊNCIA (Sticky)
-        if noChao then
-            myVelN = -STICKY_FORCE * dt -- Puxa para a superfície
+        -- 4. ANIMAÇÃO
+        if moveDir.Magnitude > 1 and noChao then
+            if not animTrack.IsPlaying then
+                animTrack:Play()
+            end
+            animTrack:AdjustSpeed(1)
         else
-            myVelN = myVelN - GRAV_ACCEL * dt
+            animTrack:Stop(0.2)
         end
 
-        -- 4. PULO
+        -- 5. PULO
         if UserInputService:IsKeyDown(Enum.KeyCode.Space) and noChao and not pulando then
-            myVelN = JUMP_POWER
-            noChao = false
+            myVelN  = JUMP_POWER
+            noChao  = false
             pulando = true
-            task.delay(0.5, function() pulando = false end)
+            task.delay(0.55, function() pulando = false end)
         end
 
-        -- 5. ATUALIZA POSIÇÃO
-        myPos = myPos + (myNormal * myVelN * dt) + (velLateral * dt)
+        -- 6. ATUALIZA POSIÇÃO
+        myPos = myPos + (myNormal * myVelN * dt) + (moveDir * dt)
 
-        -- 6. COLISÃO E AJUSTE DE NORMAL
+        -- 7. COLISÃO/ATERRIZAGEM
         if norm then
-            -- Suavização de cantos (Lerp progressivo)
-            myNormal = myNormal:Lerp(norm, math.min(dt * LERP_SPEED, 1)).Unit
-            
+            -- Magnetismo suave para a superfície
+            if dist < RAY_DIST * 0.9 then
+                myNormal = myNormal:Lerp(norm, math.min(dt * NORMAL_SPEED, 1)).Unit
+            end
+
             if dist <= LAND_DIST and myVelN <= 0 then
                 myVelN = 0
                 noChao = true
                 myPos  = pt + norm * LAND_DIST
+                myNormal = myNormal:Lerp(norm, 0.5).Unit
             else
                 noChao = false
             end
@@ -210,16 +214,8 @@ local function ligar()
             noChao = false
         end
 
-        -- 7. ANIMAÇÃO
-        if velLateral.Magnitude > 1 and noChao then
-            if not animTrack.IsPlaying then animTrack:Play() end
-            animTrack:AdjustSpeed(WALK_SPEED / 14)
-        else
-            animTrack:Stop(0.15)
-        end
-
-        -- 8. APLICAÇÃO FINAL
-        h.CFrame = getFinalCF(myPos, myNormal, camera.CFrame.LookVector)
+        -- 8. APLICA CFRAME
+        h.CFrame = makeCF(myPos, myNormal, cLook)
         h.AssemblyLinearVelocity  = Vector3.zero
         h.AssemblyAngularVelocity = Vector3.zero
     end)
@@ -230,7 +226,9 @@ end
 -- ==============================
 local function desligar()
     ativo = false
-    stopEverything()
+    if loop then loop:Disconnect(); loop = nil end
+    stopAnim()
+
     local char = player.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -239,46 +237,43 @@ local function desligar()
         if hrp then
             hrp.AssemblyLinearVelocity  = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
+            hrp.CFrame = CFrame.new(hrp.Position)
         end
     end
 end
 
 -- ==============================
--- INTERFACE (ESTILO PREMIUM V7)
+-- GUI
 -- ==============================
-local function criarUI()
-    local old = player.PlayerGui:FindFirstChild("LagatixaV7")
+local function criarGUI()
+    local old = player.PlayerGui:FindFirstChild("LagatixaGUI")
     if old then old:Destroy() end
 
     local gui = Instance.new("ScreenGui")
-    gui.Name = "LagatixaV7"; gui.ResetOnSpawn = false; gui.Parent = player.PlayerGui
+    gui.Name = "LagatixaGUI"
+    gui.ResetOnSpawn = false
+    gui.Parent = player.PlayerGui
 
-    local main = Instance.new("Frame", gui)
-    main.Size = UDim2.new(0, 220, 0, 110); main.Position = UDim2.new(0.5, -110, 0.85, 0)
-    main.BackgroundColor3 = Color3.fromRGB(15, 15, 20); main.BorderSizePixel = 0
-    main.Active = true; main.Draggable = true
-    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
-    
-    local stroke = Instance.new("UIStroke", main)
-    stroke.Thickness = 2; stroke.Color = Color3.fromRGB(50, 120, 255); stroke.Transparency = 0.4
+    local win = Instance.new("Frame", gui)
+    win.Size = UDim2.new(0, 200, 0, 100)
+    win.Position = UDim2.new(0, 50, 0.5, -50)
+    win.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    win.Active = true
+    win.Draggable = true
+    Instance.new("UICorner", win)
 
-    local title = Instance.new("TextLabel", main)
-    title.Size = UDim2.new(1, 0, 0, 35); title.BackgroundTransparency = 1
-    title.Text = "LAGATIXA ROBUSTA V7"; title.TextColor3 = Color3.new(1,1,1)
-    title.Font = Enum.Font.GothamBold; title.TextSize = 13
-
-    local btn = Instance.new("TextButton", main)
-    btn.Size = UDim2.new(0.85, 0, 0, 45); btn.Position = UDim2.new(0.075, 0, 0.45, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(35, 150, 80); btn.Text = "ATIVAR"
-    btn.TextColor3 = Color3.new(1,1,1); btn.Font = Enum.Font.GothamBold; btn.TextSize = 14
+    local btn = Instance.new("TextButton", win)
+    btn.Size = UDim2.new(0.8, 0, 0.4, 0)
+    btn.Position = UDim2.new(0.1, 0, 0.3, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+    btn.Text = "ATIVAR LAGATIXA"
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.Font = Enum.Font.GothamBold
     Instance.new("UICorner", btn)
 
     local function updateUI()
-        TweenService:Create(btn, TweenInfo.new(0.3), {
-            BackgroundColor3 = ativo and Color3.fromRGB(150, 40, 40) or Color3.fromRGB(35, 150, 80)
-        }):Play()
-        btn.Text = ativo and "DESATIVAR" or "ATIVAR"
-        stroke.Color = ativo and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(50, 120, 255)
+        btn.Text = ativo and "DESATIVAR" or "ATIVAR LAGATIXA"
+        btn.BackgroundColor3 = ativo and Color3.fromRGB(180, 40, 40) or Color3.fromRGB(40, 180, 80)
     end
 
     btn.MouseButton1Click:Connect(function()
@@ -288,19 +283,15 @@ local function criarUI()
     end)
 end
 
--- ==============================
--- GESTÃO DE RESPAWN
--- ==============================
+criarGUI()
+
 player.CharacterAdded:Connect(function()
     if ativo then
-        task.wait(1.5)
+        desligar()
+        task.wait(1)
         if ativo then ligar() end
     end
 end)
 
-task.spawn(function()
-    while not player:FindFirstChild("PlayerGui") do task.wait() end
-    criarUI()
-end)
-
-print("[Lagatixa v7] Sistema de movimento robusto carregado.")
+print("[Lagatixa v6] Ativado!")
+!")
