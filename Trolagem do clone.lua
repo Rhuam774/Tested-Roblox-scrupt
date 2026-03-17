@@ -105,48 +105,96 @@ local function encontrarMotors(char)
 end
 
 local function animarPersonagem(dt, isMoving, moveSpeed)
+    local breathing = math.sin(tick() * 1.5) * 0.015
+    
     if not isMoving then
-        -- Se não está movendo, resetar para posição idle (levemente diferente da original para parecer natural)
+        -- Pose Idle de Lagatixa (Segura e sem deformar)
         for motorName, data in pairs(bodyMotors) do
             local motor = data.motor
             local originalC0 = data.originalC0
+            local targetOffset = CFrame.identity
             
-            -- Adiciona uma leve inclinação para a posição idle
-            local idleOffset = CFrame.Angles(0, 0, 0)
             if motorName == "LeftShoulder" or motorName == "RightShoulder" then
-                idleOffset = CFrame.Angles(math.rad(5), 0, 0)
+                -- Braços levemente para fora (Estilo réptil)
+                local side = (motorName == "LeftShoulder" and -1 or 1)
+                targetOffset = CFrame.Angles(math.rad(5) + breathing, 0, side * math.rad(15))
             elseif motorName == "LeftHip" or motorName == "RightHip" then
-                idleOffset = CFrame.Angles(math.rad(-5), 0, 0)
+                -- Pernas levemente para trás e fora
+                local side = (motorName == "LeftHip" and -1 or 1)
+                targetOffset = CFrame.Angles(math.rad(-10) - breathing, 0, side * math.rad(10))
+            elseif motorName == "LeftElbow" or motorName == "RightElbow" then
+                targetOffset = CFrame.Angles(math.rad(-25), 0, 0)
+            elseif motorName == "LeftKnee" or motorName == "RightKnee" then
+                targetOffset = CFrame.Angles(math.rad(25), 0, 0)
+            elseif motorName == "Root" then
+                -- Baixa levemente o centro de massa
+                targetOffset = CFrame.new(0, -0.15 + breathing, 0)
             end
             
-            motor.C0 = originalC0 * idleOffset
+            motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, dt * 8)
         end
         return
     end
     
-    -- Animação de andar
-    animationTime = animationTime + dt * moveSpeed * 5 -- Ajuste a velocidade da animação aqui
+    -- Animação de Andar (Revisada para evitar deformação)
+    local cycleSpeed = 12 + (moveSpeed * 6)
+    animationTime = animationTime + dt * cycleSpeed
+    
+    local sin = math.sin(animationTime)
+    local cos = math.cos(animationTime)
+    
+    -- Configurações de Amplitude (Valores seguros para evitar quebra de malha)
+    local walkSwing = math.rad(30)  -- Movimento frente/trás
+    local walkSplay = math.rad(18)  -- Abertura das pernas
+    local spineSway = math.rad(12)  -- Ondulação lateral (Reduzido para não deformar o tronco)
+    local bobAmount = 0.12          -- Subida/Descida (Suave)
     
     for motorName, data in pairs(bodyMotors) do
         local motor = data.motor
         local originalC0 = data.originalC0
-        
-        -- Ângulos de animação (em radianos)
-        local angle = math.sin(animationTime) * math.rad(20) -- Amplitude de 20 graus
+        local targetOffset = CFrame.identity
         
         if motorName == "LeftShoulder" then
-            motor.C0 = originalC0 * CFrame.Angles(angle, 0, 0)
+            -- Braço Esquerdo
+            targetOffset = CFrame.Angles(sin * walkSwing, 0, -walkSplay - (cos * math.rad(10)))
         elseif motorName == "RightShoulder" then
-            motor.C0 = originalC0 * CFrame.Angles(-angle, 0, 0)
+            -- Braço Direito
+            targetOffset = CFrame.Angles(-sin * walkSwing, 0, walkSplay + (cos * math.rad(10)))
         elseif motorName == "LeftHip" then
-            motor.C0 = originalC0 * CFrame.Angles(-angle, 0, 0)
+            -- Perna Esquerda
+            targetOffset = CFrame.Angles(-sin * walkSwing, 0, -walkSplay + (cos * math.rad(10)))
         elseif motorName == "RightHip" then
-            motor.C0 = originalC0 * CFrame.Angles(angle, 0, 0)
+            -- Perna Direita
+            targetOffset = CFrame.Angles(sin * walkSwing, 0, walkSplay - (cos * math.rad(10)))
+            
+        elseif motorName == "LeftElbow" or motorName == "RightElbow" then
+            -- Articulação cotovelo (Dobra apenas quando a pata está no ar)
+            local phase = (motorName == "LeftElbow") and sin or -sin
+            local flexion = (phase > 0) and (phase * math.rad(35)) or 0
+            targetOffset = CFrame.Angles(-math.rad(20) - flexion, 0, 0)
+            
+        elseif motorName == "LeftKnee" or motorName == "RightKnee" then
+            -- Articulação joelho
+            local phase = (motorName == "LeftKnee") and -sin or sin
+            local flexion = (phase > 0) and (phase * math.rad(35)) or 0
+            targetOffset = CFrame.Angles(math.rad(20) + flexion, 0, 0)
+            
+        elseif motorName == "Root" then
+            -- Movimento do corpo inteiro relativo ao RootPart
+            local vBob = math.abs(cos) * bobAmount
+            targetOffset = CFrame.new(0, -0.1 + vBob, 0) * CFrame.Angles(0, cos * spineSway, 0)
+            
+        elseif motorName == "Waist" then
+            -- O UpperTorso acompanha levemente para suavizar a curva
+            targetOffset = CFrame.Angles(0, cos * (spineSway * 0.5), 0)
+            
         elseif motorName == "Neck" then
-            -- Cabeça se move levemente para os lados
-            local neckAngle = math.sin(animationTime * 0.5) * math.rad(5)
-            motor.C0 = originalC0 * CFrame.Angles(0, neckAngle, 0)
+            -- Contra-balanço da cabeça
+            targetOffset = CFrame.Angles(0, -cos * (spineSway * 1.5), 0)
         end
+        
+        -- Aplica com Lerp constante para suavidade máxima
+        motor.C0 = motor.C0:Lerp(originalC0 * targetOffset, 0.35)
     end
 end
 
@@ -207,11 +255,15 @@ local function atualizarCabeca(char, surfaceNormal)
     -- Limita os ângulos
     yaw = math.clamp(yaw, -math.rad(70), math.rad(70))
     
-    -- Aplica no C0 do Neck (preservando a posição original)
-    local originalC0 = neck.C0 -- Usamos a C0 atual, que pode ter sido modificada pela animação
+    -- Aplica no C0 do Neck (preservando a rotação da animação se houver)
+    local baseC0 = originalC0
+    -- Se o motor estiver na nossa tabela de motores animados, usamos a C0 que a animação definiu
+    if bodyMotors["Neck"] then
+        baseC0 = bodyMotors["Neck"].motor.C0
+    end
     
-    local rotacao = CFrame.Angles(0, yaw, 0) -- Sem pitch para evitar inclinações verticais
-    neck.C0 = originalC0 * rotacao
+    local rotacao = CFrame.Angles(0, yaw, 0)
+    neck.C0 = baseC0 * rotacao
 end
 
 -- ==============================
