@@ -41,14 +41,10 @@ local animTrack   = nil
 -- RAYCAST: encontra superficie mais proxima
 -- Verifica direcao da normal atual E as 5 outras faces locais
 -- ==============================
-local function detectar(hrp, normal)
+local function detectar(pos, cf, normal, char)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = { player.Character }
-
-    local pos = hrp.Position
-    -- Prioriza a direcao "baixo" local (normal invertida), depois as outras 5
-    local cf = hrp.CFrame
+    params.FilterDescendantsInstances = { char }
     local dirs = {
         -normal,           -- principal: direcao atual da gravidade
         -cf.UpVector,
@@ -133,19 +129,6 @@ local function ligar()
         local u = c:FindFirstChildOfClass("Humanoid")
         if not h or not u then return end
 
-        -- --------------------------------------------------
-        -- 1. DETECTA SUPERFICIE
-        -- --------------------------------------------------
-        local norm, dist, pt = detectar(h, myNormal)
-
-        -- --------------------------------------------------
-        -- 2. GRAVIDADE CUSTOMIZADA (acumula velocidade em direcao a superficie)
-        -- --------------------------------------------------
-        myVelN = myVelN - GRAV_ACCEL * dt   -- negativo = para a superficie
-
-        -- --------------------------------------------------
-        -- 3. MOVIMENTO WASD no plano da superficie
-        -- --------------------------------------------------
         local mX, mZ = 0, 0
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then mZ = -1 end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then mZ =  1 end
@@ -191,17 +174,16 @@ local function ligar()
         end
 
         -- --------------------------------------------------
-        -- 5. ATUALIZA POSICAO
+        -- 2. MOVIMENTO E GRAVIDADE
         -- --------------------------------------------------
-        -- Componente normal (pulo/queda): myNormal * myVelN * dt
-        -- Componente lateral (WASD no plano): velLateral * dt
-        myPos = myPos
-              + myNormal * myVelN * dt
-              + velLateral      * dt
+        myVelN = myVelN - GRAV_ACCEL * dt
+        myPos = myPos + myNormal * myVelN * dt + velLateral * dt
 
         -- --------------------------------------------------
-        -- 6. COLISAO COM SUPERFICIE (aterrissar)
+        -- 3. DETECTA SUPERFICIE NA NOVA POSICAO
         -- --------------------------------------------------
+        local norm, dist, pt = detectar(myPos, h.CFrame, myNormal, c)
+
         if norm then
             -- Suaviza normal APENAS quando proximo da superficie
             if dist < RAY_DIST * 0.8 then
@@ -227,7 +209,7 @@ local function ligar()
         end
 
         -- --------------------------------------------------
-        -- 7. APLICA POSICAO E ROTACAO DIRETO NO HRP
+        -- 4. APLICA POSICAO E ROTACAO DIRETO NO HRP
         -- --------------------------------------------------
         local cf = makeCF(myPos, myNormal, camera.CFrame.LookVector)
         h.CFrame = cf
