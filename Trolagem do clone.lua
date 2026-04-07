@@ -1,795 +1,2498 @@
--- =============================================================
---  MODO LAGATIXA  v10.2  -  ANIMAÇÃO MANUAL SIMPLES
--- =============================================================
+-- ============================================================
+-- MOD MENU DELTA v10.1 - CORRECAO DO PAINEL + DIAGNOSTICO
+-- CORRECOES v10.1:
+--   - Diagnostico detalhado se Rayfield falhar
+--   - Window validada antes de criar abas
+--   - Dropdowns com CurrentOption como string (nao array)
+--   - forcarPararTodasTracks corrigida
+--   - Verificacao de character antes de executar
+--   - Error logging visivel no console
+-- ============================================================
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local TweenService     = game:GetService("TweenService")
+print("========================================")
+print("[DELTA v10.1] Iniciando carregamento...")
+print("========================================")
 
-local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
+-- ============================================================
+-- SISTEMA DE LOG
+-- ============================================================
+local LogBuffer = {}
+local MAX_LOGS = 500
+local logLabelRef = nil
 
--- ==============================
--- CONSTANTES
--- ==============================
-local WALK_SPEED   = 16
-local JUMP_POWER   = 50
-local GRAVITY      = 196.2
-local STICK_DIST   = 3
-
--- ==============================
--- ESTADO
--- ==============================
-local ativo = false
-local loop = nil
-local mobileControls = nil
-local animState = {
-    time = 0,
-    isMoving = false,
-    moveSpeed = 0,
-    isGrounded = true,
-    verticalVelocity = 0,
-    phase = "idle"
-}
-
--- ==============================
--- RAYCAST SIMPLES
--- ==============================
-local function raycastChao(pos, char)
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {char}
-    params.FilterType = Enum.RaycastFilterType.Exclude
-
-    local dirs = {
-        Vector3.new(0, -1, 0),
-        Vector3.new(0, 1, 0),
-        Vector3.new(1, 0, 0),
-        Vector3.new(-1, 0, 0),
-        Vector3.new(0, 0, 1),
-        Vector3.new(0, 0, -1),
-    }
-
-    local melhorHit = nil
-    local melhorDist = math.huge
-
-    for _, dir in ipairs(dirs) do
-        local result = workspace:Raycast(pos, dir * 10, params)
-        if result then
-            local dist = (result.Position - pos).Magnitude
-            if dist < melhorDist then
-                melhorDist = dist
-                melhorHit = result
+local function addLog(msg, tipo)
+    tipo = tipo or "INFO"
+    local timeStr = os and os.date and os.date("%H:%M:%S") or "??:??:??"
+    local entry = "[" .. timeStr .. "] [" .. tipo .. "] " .. tostring(msg)
+    table.insert(LogBuffer, entry)
+    if #LogBuffer > MAX_LOGS then table.remove(LogBuffer, 1) end
+    if logLabelRef and logLabelRef.Parent then
+        pcall(function()
+            logLabelRef.Text = table.concat(LogBuffer, "\n")
+            logLabelRef.TextSize = 13
+            local parent = logLabelRef.Parent
+            if parent:IsA("ScrollingFrame") then
+                parent.CanvasSize = UDim2.new(0, 0, 0, logLabelRef.TextBounds.Y + 40)
+                parent.CanvasPosition = Vector2.new(0, math.max(0, logLabelRef.TextBounds.Y - parent.AbsoluteSize.Y + 40))
             end
-        end
+        end)
     end
-
-    return melhorHit, melhorDist
 end
 
--- ==============================
--- SISTEMA DE ANIMAÇÃO MANUAL
--- ==============================
-local bodyMotors = {} 
-local animationTime = 0
+-- ============================================================
+-- SERVICOS (carregar antes de tudo)
+-- ============================================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
 
-local function removerRabo(char)
-    task.spawn(function()
-        while ativo and char and char.Parent do
-            for _, obj in ipairs(char:GetDescendants()) do
-                if (obj:IsA("Accessory") or obj:IsA("BasePart")) and (obj.Name:lower():find("tail") or obj.Name:lower():find("rabo")) then
-                    if obj:IsA("BasePart") then
-                        obj.Transparency = 1
-                        obj.CanCollide = false
-                    elseif obj:IsA("Accessory") and obj:FindFirstChild("Handle") then
-                        obj.Handle.Transparency = 1
-                        obj.Handle.CanCollide = false
-                    end
-                end
+addLog("Servicos carregados", "OK")
+addLog("LocalPlayer: " .. tostring(LocalPlayer and LocalPlayer.Name or "DESCONHECIDO"), "INFO")
+
+-- ============================================================
+-- AGUARDAR CHARACTER PRONTO
+-- ============================================================
+local function waitForCharacter()
+    local timeout = 10
+    local elapsed = 0
+    while elapsed < timeout do
+        if LocalPlayer.Character then
+            local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if hrp and hum then
+                addLog("Character pronto: " .. LocalPlayer.Character.Name, "OK")
+                return true
             end
-            task.wait(2) -- Loop leve para garantir que o rabo não volte se o personagem mudar
+        end
+        task.wait(0.5)
+        elapsed = elapsed + 0.5
+    end
+    addLog("AVISO: Character nao carregou completamente, continuando mesmo assim...", "WARN")
+    return false
+end
+
+waitForCharacter()
+
+-- ============================================================
+-- CARREGAR RAYFIELD COM DIAGNOSTICO
+-- ============================================================
+local Rayfield = nil
+local RayfieldLoadTime = 0
+
+do
+    addLog("Baixando Rayfield...", "INFO")
+    local startTime = tick()
+    
+    local ok, result = pcall(function()
+        return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+    end)
+    
+    RayfieldLoadTime = tick() - startTime
+    
+    if not ok then
+        addLog("ERRO CRITICO ao baixar Rayfield: " .. tostring(result), "ERRO")
+        addLog("Possivel causa: Exploit sem suporte a HttpGet ou site bloqueado", "ERRO")
+        -- Mostrar notificacao basica como fallback
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "Delta v10.1 - ERRO",
+                Text = "Falha ao carregar Rayfield: " .. tostring(result),
+                Duration = 10
+            })
+        end)
+        return
+    end
+    
+    if not result then
+        addLog("ERRO CRITICO: Rayfield retornou nil!", "ERRO")
+        addLog("Possivel causa: API do Rayfield mudou ou resposta invalida", "ERRO")
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "Delta v10.1 - ERRO",
+                Text = "Rayfield retornou nil - API pode ter mudado",
+                Duration = 10
+            })
+        end)
+        return
+    end
+    
+    Rayfield = result
+    addLog("Rayfield carregado em " .. string.format("%.2f", RayfieldLoadTime) .. "s", "OK")
+end
+
+if not Rayfield then
+    addLog("FALHA: Nao foi possivel continuar sem Rayfield", "ERRO")
+    return
+end
+
+-- ============================================================
+-- VERIFICAR METODOS DO RAYFIELD
+-- ============================================================
+if not Rayfield.CreateWindow then
+    addLog("ERRO: Rayfield.CreateWindow nao existe!", "ERRO")
+    addLog("API do Rayfield pode ter mudado", "ERRO")
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Delta v10.1 - ERRO",
+            Text = "Rayfield API incompativel - CreateWindow nao encontrado",
+            Duration = 10
+        })
+    end)
+    return
+end
+
+addLog("Rayfield API validada - CreateWindow disponivel", "OK")
+
+-- ============================================================
+-- VARIAVEIS GLOBAIS
+-- ============================================================
+local seguindo = false
+local playerAlvo = nil
+local playerAlvoNome = nil
+local conexaoSeguir = nil
+local distanciaSeguir = 3
+local walkSpeedOriginal = 16
+local modoInvisivel = false
+local modoSeguir = "normal"
+
+local waypointIndex = 1
+local waypoints = {}
+local ultimaPosAlvo = nil
+local pathRecalcTimer = 0
+
+local selecaoPorToque = false
+local conexaoToque = nil
+local toqueCooldownAtivo = false
+local toqueCooldownTimer = 0
+local TOQUE_COOLDOWN_DURACAO = 3
+
+local highlightSelecionado = nil
+local playerSelecionadoNome = nil
+
+local speedAtivo = false
+local speedValor = 50
+local conexaoSpeed = nil
+
+local alvoUltimaPos = nil
+local alvoParadoTimer = 0
+local alvoParadoThreshold = 0.8
+local alvoEstaParado = false
+local estaDancando = false
+local meuPersonagemPerto = false
+local dancaCancelada = false
+
+-- FUGIR
+local fugindo = false
+local playerPerseguidor = nil
+local playerPerseguidorNome = nil
+local conexaoFugir = nil
+local fugirHighlight = nil
+local fugirDistanciaSegura = 30
+local fugirDistanciaMinima = 8
+local inimigoPosAnterior = nil
+local fugirMemoriaPosicoes = {}
+local FUGIR_MEMORIA_MAX = 20
+local fugirMemoriaTimer = 0
+local fantasmaAtivo = false
+local fantasmaTimer = 0
+local FANTASMA_DURACAO = 1.5
+local fugirJukeTimer = 0
+local fugirJukeInterval = 0.8
+local fugirCollisionsBackup = {}
+
+-- CLONES
+local clonesAtivos = {}
+local cloneAlvo = nil
+local cloneAlvoNome = nil
+local cloneDistancia = 5
+local cloneSpawnRaio = 15
+local cloneVelocidade = 22
+local cloneDancar = true
+local cloneContador = 0
+local clonePasta = nil
+
+-- ANIMACOES
+local ANIM_SENTADO = "rbxassetid://2506281703"
+
+local ANIMS_ANDAR = {
+    {nome = "Andar Normal", id = "rbxassetid://180426354"},
+    {nome = "Andar Ninja", id = "rbxassetid://656118852"},
+    {nome = "Andar Zombie", id = "rbxassetid://616163682"},
+    {nome = "Andar Velho", id = "rbxassetid://616006778"},
+    {nome = "Andar Cowboy", id = "rbxassetid://5765898383"},
+    {nome = "Andar Confiante", id = "rbxassetid://616010382"},
+    {nome = "Andar Sorrateiro", id = "rbxassetid://616003713"},
+    {nome = "Andar Manco", id = "rbxassetid://616008087"},
+    {nome = "Andar Robozinho", id = "rbxassetid://616013216"},
+    {nome = "Andar Feliz", id = "rbxassetid://5765891244"},
+}
+
+local DANCAS = {
+    {nome = "Floss Dance", id = "rbxassetid://5917459365"},
+    {nome = "Hype Dance", id = "rbxassetid://5918726674"},
+    {nome = "Twerk", id = "rbxassetid://3360816860"},
+    {nome = "Orange Justice", id = "rbxassetid://5918580760"},
+    {nome = "Default Dance", id = "rbxassetid://5915773155"},
+    {nome = "Robot Dance", id = "rbxassetid://616006778"},
+    {nome = "Electro Shuffle", id = "rbxassetid://5913382268"},
+    {nome = "Capoeira", id = "rbxassetid://5862461553"},
+    {nome = "Breakdance", id = "rbxassetid://5917600302"},
+    {nome = "Macarena", id = "rbxassetid://5915791549"},
+    {nome = "Gangnam Style", id = "rbxassetid://4212455378"},
+    {nome = "Dab", id = "rbxassetid://5915693819"},
+    {nome = "Salsa", id = "rbxassetid://5915827002"},
+    {nome = "Twist", id = "rbxassetid://5915831765"},
+    {nome = "Chicken Dance", id = "rbxassetid://5915805935"},
+    {nome = "Running Man", id = "rbxassetid://5917468522"},
+    {nome = "Kick It", id = "rbxassetid://5918634604"},
+    {nome = "Pop Lock", id = "rbxassetid://5913287938"},
+    {nome = "Celebrate", id = "rbxassetid://5915779043"},
+}
+
+local animSentadoTrack = nil
+local animAndarTrack = nil
+local animDancaTrack = nil
+local animAndarAtual = 1
+local animDancaAtual = 1
+local dancarAoParar = true
+
+-- ============================================================
+-- FUNCOES UTILITARIAS
+-- ============================================================
+local function getRootPart(player)
+    if player and player.Character then
+        return player.Character:FindFirstChild("HumanoidRootPart")
+    end
+    return nil
+end
+
+local function getHumanoid(player)
+    if player and player.Character then
+        return player.Character:FindFirstChildOfClass("Humanoid")
+    end
+    return nil
+end
+
+local function getListaPlayers()
+    local lista = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            table.insert(lista, player.Name)
+        end
+    end
+    return lista
+end
+
+local function getPlayerByName(nome)
+    if not nome or nome == "" then return nil end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Name:lower() == nome:lower() then return player end
+    end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Name:lower():find(nome:lower(), 1, true) then return player end
+    end
+    return nil
+end
+
+-- ============================================================
+-- ANIMACOES (CORRIGIDO)
+-- ============================================================
+local function forcarPararTodasTracks()
+    pcall(function()
+        local character = LocalPlayer.Character
+        if not character then return end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid then return end
+        local animator = humanoid:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+                pcall(function() track:Stop(0) end)
+                pcall(function() track:AdjustWeight(0) end)
+            end
         end
     end)
 end
 
-local function encontrarMotors(char)
-    bodyMotors = {}
-    
-    local mapping = {
-        ["LeftShoulder"] = {"LeftShoulder", "Left Shoulder"},
-        ["RightShoulder"] = {"RightShoulder", "Right Shoulder"},
-        ["LeftHip"] = {"LeftHip", "Left Hip"},
-        ["RightHip"] = {"RightHip", "Right Hip"},
-        ["Neck"] = {"Neck"},
-        ["Waist"] = {"Waist", "RootJoint", "Root Joint"},
-        ["Root"] = {"LowerTorso", "Root"}
+local function pararAnimsMovimento()
+    pcall(function()
+        if animSentadoTrack then animSentadoTrack:Stop(0); animSentadoTrack = nil end
+    end)
+    pcall(function()
+        if animAndarTrack then animAndarTrack:Stop(0); animAndarTrack = nil end
+    end)
+end
+
+local function pararDanca()
+    pcall(function()
+        if animDancaTrack then
+            animDancaTrack:Stop(0)
+            pcall(function() animDancaTrack:AdjustWeight(0) end)
+            pcall(function() animDancaTrack:Destroy() end)
+            animDancaTrack = nil
+        end
+    end)
+    estaDancando = false
+    forcarPararTodasTracks()
+end
+
+local function pararTodasAnimacoes()
+    pararAnimsMovimento()
+    pararDanca()
+    forcarPararTodasTracks()
+end
+
+local function tocarAnimacao(animId, looped, fadeIn)
+    local character = LocalPlayer.Character
+    if not character then return nil end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return nil end
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = humanoid
+    end
+    local anim = Instance.new("Animation")
+    anim.AnimationId = animId
+    local track = nil
+    pcall(function() track = animator:LoadAnimation(anim) end)
+    if not track then pcall(function() track = humanoid:LoadAnimation(anim) end) end
+    if track then
+        track.Looped = looped or false
+        track.Priority = Enum.AnimationPriority.Action4
+        track:Play(fadeIn or 0.2)
+    end
+    return track
+end
+
+local function iniciarAnimSentado()
+    pcall(function() if animAndarTrack then animAndarTrack:Stop(0); animAndarTrack = nil end end)
+    if not animSentadoTrack then animSentadoTrack = tocarAnimacao(ANIM_SENTADO, true, 0.3) end
+end
+
+local function iniciarAnimAndar()
+    pcall(function() if animSentadoTrack then animSentadoTrack:Stop(0); animSentadoTrack = nil end end)
+    if not animAndarTrack then
+        local ad = ANIMS_ANDAR[animAndarAtual]
+        if ad then animAndarTrack = tocarAnimacao(ad.id, true, 0.3) end
+    end
+end
+
+local function iniciarDanca(manual)
+    if not manual and dancaCancelada then return end
+    if not manual and not seguindo then return end
+    pararAnimsMovimento()
+    if estaDancando and animDancaTrack then return end
+    if animDancaTrack then
+        pcall(function() animDancaTrack:Stop(0) end)
+        pcall(function() animDancaTrack:Destroy() end)
+        animDancaTrack = nil
+    end
+    task.wait(0.1)
+    if not manual and dancaCancelada then return end
+    if not manual and not seguindo then return end
+    local animData = DANCAS[animDancaAtual]
+    if not animData then return end
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = humanoid
+    end
+    local anim = Instance.new("Animation")
+    anim.AnimationId = animData.id
+    local track = nil
+    pcall(function() track = animator:LoadAnimation(anim) end)
+    if not track then pcall(function() track = humanoid:LoadAnimation(anim) end) end
+    if track then
+        track.Looped = true
+        track.Priority = Enum.AnimationPriority.Action4
+        track:Play(0.1)
+        animDancaTrack = track
+        estaDancando = true
+    end
+end
+
+-- ============================================================
+-- HIGHLIGHTS
+-- ============================================================
+local function limparHighlightSelecionado()
+    pcall(function()
+        if highlightSelecionado and highlightSelecionado.Parent then
+            highlightSelecionado:Destroy()
+        end
+        highlightSelecionado = nil
+    end)
+    for _, player in ipairs(Players:GetPlayers()) do
+        pcall(function()
+            if player.Character then
+                local hl = player.Character:FindFirstChild("DELTA_SELECIONADO")
+                if hl then hl:Destroy() end
+            end
+        end)
+    end
+end
+
+local function marcarPlayerSelecionado(player)
+    limparHighlightSelecionado()
+    if not player or not player.Character then return end
+    playerSelecionadoNome = player.Name
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "DELTA_SELECIONADO"
+    highlight.FillTransparency = 0.5
+    highlight.FillColor = Color3.fromRGB(0, 255, 80)
+    highlight.OutlineColor = Color3.fromRGB(0, 255, 80)
+    highlight.OutlineTransparency = 0
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = player.Character
+    highlightSelecionado = highlight
+    if Rayfield then
+        pcall(function()
+            Rayfield:Notify({Title = "Selecionado", Content = player.Name, Duration = 2})
+        end)
+    end
+end
+
+local function limparHighlightPerseguidor()
+    pcall(function()
+        if fugirHighlight and fugirHighlight.Parent then fugirHighlight:Destroy() end
+        fugirHighlight = nil
+    end)
+    for _, p in ipairs(Players:GetPlayers()) do
+        pcall(function()
+            if p.Character then
+                local hl = p.Character:FindFirstChild("DELTA_PERSEGUIDOR")
+                if hl then hl:Destroy() end
+            end
+        end)
+    end
+end
+
+local function marcarPerseguidor(player)
+    limparHighlightPerseguidor()
+    if not player or not player.Character then return end
+    local hl = Instance.new("Highlight")
+    hl.Name = "DELTA_PERSEGUIDOR"
+    hl.FillTransparency = 0.3
+    hl.FillColor = Color3.fromRGB(255, 0, 0)
+    hl.OutlineColor = Color3.fromRGB(255, 50, 50)
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = player.Character
+    fugirHighlight = hl
+end
+
+local function selecionarPlayer(nome)
+    local player = getPlayerByName(nome)
+    if player then
+        marcarPlayerSelecionado(player)
+        playerSelecionadoNome = player.Name
+        return player
+    else
+        if Rayfield then
+            pcall(function()
+                Rayfield:Notify({Title = "Erro", Content = "'" .. tostring(nome) .. "' nao encontrado!", Duration = 3})
+            end)
+        end
+        return nil
+    end
+end
+
+-- ============================================================
+-- NOTIFICACAO SEGURA (evita erros se Rayfield falhar)
+-- ============================================================
+local function safeNotify(title, content, duration)
+    if Rayfield then
+        pcall(function()
+            Rayfield:Notify({Title = title, Content = content, Duration = duration or 3})
+        end)
+    else
+        addLog(title .. ": " .. content, "NOTIFY")
+    end
+end
+
+-- ============================================================
+-- SPEED HACK
+-- ============================================================
+local function iniciarSpeedLoop()
+    if conexaoSpeed then conexaoSpeed:Disconnect(); conexaoSpeed = nil end
+    conexaoSpeed = RunService.Heartbeat:Connect(function()
+        if speedAtivo and not fugindo then
+            local hum = getHumanoid(LocalPlayer)
+            if hum then hum.WalkSpeed = speedValor end
+        end
+    end)
+end
+
+local function setSpeed(ativo, valor)
+    speedAtivo = ativo
+    speedValor = valor
+    if ativo then
+        local hum = getHumanoid(LocalPlayer)
+        if hum then walkSpeedOriginal = hum.WalkSpeed; hum.WalkSpeed = valor end
+        iniciarSpeedLoop()
+    else
+        if conexaoSpeed then conexaoSpeed:Disconnect(); conexaoSpeed = nil end
+        if not fugindo then
+            local hum = getHumanoid(LocalPlayer)
+            if hum then hum.WalkSpeed = walkSpeedOriginal end
+        end
+    end
+end
+
+-- ============================================================
+-- PATHFINDING
+-- ============================================================
+local function calcularPath(origem, destino)
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2, AgentHeight = 5, AgentCanJump = true,
+        AgentCanClimb = false, WaypointSpacing = 4,
+    })
+    local ok = pcall(function() path:ComputeAsync(origem, destino) end)
+    if ok and path.Status == Enum.PathStatus.Success then
+        return path:GetWaypoints()
+    end
+    return nil
+end
+
+-- ============================================================
+-- DETECTAR ALVO PARADO
+-- ============================================================
+local function verificarAlvoParado(targetRoot, dt)
+    if not targetRoot then alvoEstaParado = false; return end
+    local posAtual = targetRoot.Position
+    local vel = Vector3.new(0, 0, 0)
+    pcall(function() vel = targetRoot.AssemblyLinearVelocity or targetRoot.Velocity or Vector3.new(0, 0, 0) end)
+    local velH = Vector3.new(vel.X, 0, vel.Z).Magnitude
+    local posicaoMudou = false
+    if alvoUltimaPos then
+        local d = (Vector3.new(posAtual.X, 0, posAtual.Z) - Vector3.new(alvoUltimaPos.X, 0, alvoUltimaPos.Z)).Magnitude
+        posicaoMudou = d > 0.3
+    end
+    local alvoMovendo = false
+    if playerAlvo and playerAlvo.Character then
+        local alvoHum = playerAlvo.Character:FindFirstChildOfClass("Humanoid")
+        if alvoHum then alvoMovendo = alvoHum.MoveDirection.Magnitude > 0.1 end
+    end
+    local paradoAgora = (velH < 1) and (not posicaoMudou) and (not alvoMovendo)
+    if paradoAgora then
+        alvoParadoTimer = alvoParadoTimer + dt
+        if alvoParadoTimer >= alvoParadoThreshold then alvoEstaParado = true end
+    else
+        alvoParadoTimer = 0
+        alvoEstaParado = false
+    end
+    alvoUltimaPos = posAtual
+end
+
+-- ============================================================
+-- GERENCIAR DANCA DURANTE SEGUIR
+-- ============================================================
+local function gerenciarDancaDuranteSeguir(meuRoot, targetRoot)
+    if modoSeguir == "encosto" then
+        if estaDancando then pararDanca() end
+        return
+    end
+    if not dancarAoParar then
+        if estaDancando then pararDanca() end
+        return
+    end
+    local distancia = (meuRoot.Position - targetRoot.Position).Magnitude
+    meuPersonagemPerto = distancia <= (distanciaSeguir + 3)
+    if alvoEstaParado and meuPersonagemPerto then
+        if not estaDancando then
+            pararAnimsMovimento()
+            task.spawn(function() iniciarDanca(false) end)
+        end
+    else
+        if estaDancando then pararDanca(); animAndarTrack = nil end
+    end
+end
+
+-- ============================================================
+-- MODOS DE SEGUIR
+-- ============================================================
+local function modoEncostoUpdate(meuRoot, meuHum, targetRoot)
+    local lookDir = targetRoot.CFrame.LookVector
+    local posAtras = targetRoot.Position - (lookDir * distanciaSeguir)
+    posAtras = Vector3.new(posAtras.X, targetRoot.Position.Y - 0.1, posAtras.Z)
+    meuRoot.CFrame = CFrame.new(posAtras, targetRoot.Position)
+    pcall(function() meuRoot.Velocity = Vector3.new(0, 0, 0) end)
+    pcall(function() meuRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0) end)
+    iniciarAnimSentado()
+end
+
+local function modoPathfindingUpdate(meuRoot, meuHum, targetRoot, dt)
+    local distancia = (meuRoot.Position - targetRoot.Position).Magnitude
+    if not estaDancando then iniciarAnimAndar() end
+    if speedAtivo then meuHum.WalkSpeed = speedValor end
+    if distancia > 60 then
+        meuRoot.CFrame = CFrame.new(targetRoot.Position - (targetRoot.CFrame.LookVector * distanciaSeguir), targetRoot.Position)
+        waypoints = {}
+        waypointIndex = 1
+        return
+    end
+    if alvoEstaParado and distancia < distanciaSeguir + 3 then
+        meuRoot.CFrame = CFrame.new(meuRoot.Position, Vector3.new(targetRoot.Position.X, meuRoot.Position.Y, targetRoot.Position.Z))
+        return
+    end
+    if distancia < distanciaSeguir + 2 then
+        meuHum:MoveTo(targetRoot.Position - (targetRoot.CFrame.LookVector * distanciaSeguir))
+        meuRoot.CFrame = CFrame.new(meuRoot.Position, Vector3.new(targetRoot.Position.X, meuRoot.Position.Y, targetRoot.Position.Z))
+        return
+    end
+    pathRecalcTimer = pathRecalcTimer + dt
+    local precisaRecalc = (ultimaPosAlvo == nil) or ((targetRoot.Position - (ultimaPosAlvo or Vector3.new(0, 0, 0))).Magnitude > 8) or (pathRecalcTimer > 1) or (#waypoints == 0)
+    if precisaRecalc then
+        pathRecalcTimer = 0
+        ultimaPosAlvo = targetRoot.Position
+        local destino = targetRoot.Position - (targetRoot.CFrame.LookVector * distanciaSeguir)
+        local novaRota = calcularPath(meuRoot.Position, destino)
+        if novaRota then
+            waypoints = novaRota
+            waypointIndex = 1
+        else
+            meuHum:MoveTo(destino)
+            return
+        end
+    end
+    if #waypoints > 0 and waypointIndex <= #waypoints then
+        local wp = waypoints[waypointIndex]
+        if wp.Action == Enum.PathWaypointAction.Jump then meuHum.Jump = true end
+        meuHum:MoveTo(wp.Position)
+        if (meuRoot.Position - wp.Position).Magnitude < 4 then waypointIndex = waypointIndex + 1 end
+    end
+end
+
+local function modoNormalUpdate(meuRoot, meuHum, targetRoot)
+    local lookDir = targetRoot.CFrame.LookVector
+    local posAtras = targetRoot.Position - (lookDir * distanciaSeguir)
+    local distancia = (meuRoot.Position - targetRoot.Position).Magnitude
+    if not estaDancando then iniciarAnimAndar() end
+    if speedAtivo then meuHum.WalkSpeed = speedValor end
+    if distancia > 60 then
+        meuRoot.CFrame = CFrame.new(posAtras, targetRoot.Position)
+    else
+        if alvoEstaParado and distancia < distanciaSeguir + 3 then
+            meuRoot.CFrame = CFrame.new(meuRoot.Position, Vector3.new(targetRoot.Position.X, meuRoot.Position.Y, targetRoot.Position.Z))
+        else
+            meuHum:MoveTo(posAtras)
+            if distancia < distanciaSeguir + 3 then
+                meuRoot.CFrame = CFrame.new(meuRoot.Position, Vector3.new(targetRoot.Position.X, meuRoot.Position.Y, targetRoot.Position.Z))
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- INICIAR/PARAR SEGUIR
+-- ============================================================
+local function iniciarSeguir(alvo)
+    if not alvo then safeNotify("Erro", "Nenhum player!"); return end
+    local alvoRoot = getRootPart(alvo)
+    if not alvoRoot then safeNotify("Erro", alvo.Name .. " sem personagem!"); return end
+    if fugindo then
+        fugindo = false
+        if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir = nil end
+        limparHighlightPerseguidor()
+    end
+    pararTodasAnimacoes()
+    limparHighlightSelecionado()
+    dancaCancelada = false
+    local meuHumanoid = getHumanoid(LocalPlayer)
+    if meuHumanoid and not speedAtivo then walkSpeedOriginal = meuHumanoid.WalkSpeed end
+    playerAlvo = alvo
+    playerAlvoNome = alvo.Name
+    seguindo = true
+    waypoints = {}
+    waypointIndex = 1
+    ultimaPosAlvo = nil
+    pathRecalcTimer = 0
+    alvoUltimaPos = nil
+    alvoParadoTimer = 0
+    alvoEstaParado = false
+    estaDancando = false
+    meuPersonagemPerto = false
+    local modoTexto = "Normal"
+    if modoSeguir == "encosto" then modoTexto = "ENCOSTO"
+    elseif modoSeguir == "pathfinding" then modoTexto = "Pathfinding" end
+    safeNotify("Seguindo!", alvo.Name .. " | " .. modoTexto)
+    if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir = nil end
+    conexaoSeguir = RunService.Heartbeat:Connect(function(dt)
+        if not seguindo or not playerAlvo then
+            if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir = nil end
+            return
+        end
+        local meuRoot = getRootPart(LocalPlayer)
+        local meuHum = getHumanoid(LocalPlayer)
+        local targetRoot = getRootPart(playerAlvo)
+        if not meuRoot or not targetRoot or not meuHum then return end
+        if speedAtivo then meuHum.WalkSpeed = speedValor end
+        pcall(function() verificarAlvoParado(targetRoot, dt) end)
+        pcall(function() gerenciarDancaDuranteSeguir(meuRoot, targetRoot) end)
+        pcall(function()
+            if modoSeguir == "encosto" then
+                modoEncostoUpdate(meuRoot, meuHum, targetRoot)
+            elseif modoSeguir == "pathfinding" then
+                if not (estaDancando and meuPersonagemPerto) then
+                    modoPathfindingUpdate(meuRoot, meuHum, targetRoot, dt)
+                else
+                    meuRoot.CFrame = CFrame.new(meuRoot.Position, Vector3.new(targetRoot.Position.X, meuRoot.Position.Y, targetRoot.Position.Z))
+                end
+            else
+                if not (estaDancando and meuPersonagemPerto) then
+                    modoNormalUpdate(meuRoot, meuHum, targetRoot)
+                else
+                    meuRoot.CFrame = CFrame.new(meuRoot.Position, Vector3.new(targetRoot.Position.X, meuRoot.Position.Y, targetRoot.Position.Z))
+                end
+            end
+        end)
+        if modoInvisivel then
+            pcall(function()
+                if LocalPlayer.Character then
+                    for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                        if part:IsA("BasePart") then part.Transparency = 1
+                        elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency = 1 end
+                    end
+                end
+            end)
+        end
+    end)
+end
+
+local function pararSeguir()
+    local nomeAlvo = playerAlvoNome
+    seguindo = false
+    dancaCancelada = true
+    if conexaoSeguir then conexaoSeguir:Disconnect(); conexaoSeguir = nil end
+    pararTodasAnimacoes()
+    estaDancando = false
+    alvoEstaParado = false
+    alvoParadoTimer = 0
+    alvoUltimaPos = nil
+    meuPersonagemPerto = false
+    task.spawn(function()
+        for i = 1, 5 do task.wait(0.1); forcarPararTodasTracks() end
+    end)
+    if not speedAtivo then
+        local meuHumanoid = getHumanoid(LocalPlayer)
+        if meuHumanoid then meuHumanoid.WalkSpeed = walkSpeedOriginal end
+    end
+    if modoInvisivel then
+        pcall(function()
+            if LocalPlayer.Character then
+                for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.Transparency = 0
+                    elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency = 0 end
+                end
+            end
+        end)
+    end
+    waypoints = {}
+    waypointIndex = 1
+    ultimaPosAlvo = nil
+    if selecaoPorToque then
+        toqueCooldownAtivo = true
+        toqueCooldownTimer = TOQUE_COOLDOWN_DURACAO
+    end
+    safeNotify("Parou!", "Parou de seguir" .. (nomeAlvo and (" " .. nomeAlvo) or ""))
+    if playerAlvo then pcall(function() marcarPlayerSelecionado(playerAlvo) end) end
+    playerAlvo = nil
+end
+
+-- ============================================================
+-- SELECAO POR TOQUE
+-- ============================================================
+local function ativarSelecaoPorToque()
+    if conexaoToque then conexaoToque:Disconnect(); conexaoToque = nil end
+    selecaoPorToque = true
+    conexaoToque = RunService.Heartbeat:Connect(function(dt)
+        if not selecaoPorToque then
+            if conexaoToque then conexaoToque:Disconnect(); conexaoToque = nil end
+            return
+        end
+        if toqueCooldownAtivo then
+            toqueCooldownTimer = toqueCooldownTimer - dt
+            if toqueCooldownTimer <= 0 then
+                toqueCooldownAtivo = false
+                toqueCooldownTimer = 0
+                safeNotify("Toque Reativado", "Selecao por toque ativa!")
+            end
+            return
+        end
+        if seguindo then return end
+        local meuRoot = getRootPart(LocalPlayer)
+        if not meuRoot then return end
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local root = getRootPart(player)
+                if root and (meuRoot.Position - root.Position).Magnitude < 5 then
+                    safeNotify("Toque!", "Encostou em " .. player.Name)
+                    iniciarSeguir(player)
+                    break
+                end
+            end
+        end
+    end)
+end
+
+local function desativarSelecaoPorToque()
+    selecaoPorToque = false
+    if conexaoToque then conexaoToque:Disconnect(); conexaoToque = nil end
+end
+
+-- ============================================================
+-- TELEPORTE
+-- ============================================================
+local function teleportarParaPlayer(nome)
+    local player = getPlayerByName(nome)
+    if not player then safeNotify("Erro", "Player nao encontrado!"); return end
+    local root = getRootPart(player)
+    local meuRoot = getRootPart(LocalPlayer)
+    if not root or not meuRoot then safeNotify("Erro", "Personagem nao encontrado!"); return end
+    local lookDir = root.CFrame.LookVector
+    local posAtras = root.Position - (lookDir * distanciaSeguir)
+    meuRoot.CFrame = CFrame.new(posAtras, root.Position)
+    safeNotify("Teleportado!", "Atras de " .. player.Name)
+end
+
+-- ============================================================
+-- MODO FUGIR
+-- ============================================================
+local function desativarFantasma()
+    if not fantasmaAtivo then return end
+    fantasmaAtivo = false
+    pcall(function()
+        local ch = LocalPlayer.Character
+        if not ch then return end
+        for partName, wasCollidable in pairs(fugirCollisionsBackup) do
+            local part = ch:FindFirstChild(partName)
+            if part and part:IsA("BasePart") then part.CanCollide = wasCollidable end
+        end
+    end)
+    fugirCollisionsBackup = {}
+end
+
+local function ativarFantasma()
+    if fantasmaAtivo then return end
+    fantasmaAtivo = true
+    fantasmaTimer = FANTASMA_DURACAO
+    fugirCollisionsBackup = {}
+    pcall(function()
+        local ch = LocalPlayer.Character
+        if not ch then return end
+        for _, part in pairs(ch:GetDescendants()) do
+            if part:IsA("BasePart") then
+                fugirCollisionsBackup[part.Name] = part.CanCollide
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function analisarDirecaoFuga(meuRoot, inimigoPos, direcao, distancia)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    pcall(function() rayParams.FilterDescendantsInstances = {LocalPlayer.Character} end)
+    local result = Workspace:Raycast(meuRoot.Position, direcao * distancia, rayParams)
+    local espacoLivre = distancia
+    if result then espacoLivre = result.Distance end
+    local posDestino = meuRoot.Position + direcao * math.min(espacoLivre * 0.9, distancia)
+    local distDoInimigo = (posDestino - inimigoPos).Magnitude
+    return {direcao = direcao, espaco = espacoLivre, distInimigo = distDoInimigo, destino = posDestino}
+end
+
+local function melhorDirecaoFuga(meuRoot, inimigoPos)
+    local direcoes = {}
+    local dirAfastar = (meuRoot.Position - inimigoPos).Unit
+    dirAfastar = Vector3.new(dirAfastar.X, 0, dirAfastar.Z).Unit
+    for i = 0, 15 do
+        local ang = (i / 16) * math.pi * 2
+        local dir = Vector3.new(math.cos(ang), 0, math.sin(ang)).Unit
+        local info = analisarDirecaoFuga(meuRoot, inimigoPos, dir, 30)
+        local score = info.distInimigo * 2 + info.espaco
+        local dotProd = dir:Dot(dirAfastar)
+        score = score + dotProd * 15
+        for _, memPos in ipairs(fugirMemoriaPosicoes) do
+            if (info.destino - memPos).Magnitude < 10 then score = score - 8 end
+        end
+        table.insert(direcoes, {info = info, score = score})
+    end
+    table.sort(direcoes, function(a, b) return a.score > b.score end)
+    return direcoes[1].info
+end
+
+local function iniciarFugir(perseguidor)
+    if not perseguidor then safeNotify("Erro", "Selecione de quem fugir!"); return end
+    if seguindo then pararSeguir() end
+    if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir = nil end
+    playerPerseguidor = perseguidor
+    playerPerseguidorNome = perseguidor.Name
+    fugindo = true
+    inimigoPosAnterior = nil
+    fugirMemoriaPosicoes = {}
+    fugirMemoriaTimer = 0
+    fugirJukeTimer = 0
+    desativarFantasma()
+    marcarPerseguidor(perseguidor)
+    safeNotify("FUGINDO!", "Fugindo de " .. perseguidor.Name)
+    conexaoFugir = RunService.Heartbeat:Connect(function(dt)
+        if not fugindo or not playerPerseguidor then
+            if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir = nil end
+            return
+        end
+        local meuRoot = getRootPart(LocalPlayer)
+        local meuHum = getHumanoid(LocalPlayer)
+        local inimigoRoot = getRootPart(playerPerseguidor)
+        if not meuRoot or not inimigoRoot or not meuHum then return end
+        local dist = (meuRoot.Position - inimigoRoot.Position).Magnitude
+        local inimigoVel = Vector3.new(0, 0, 0)
+        if inimigoPosAnterior then
+            inimigoVel = (inimigoRoot.Position - inimigoPosAnterior) / math.max(dt, 0.001)
+        end
+        inimigoPosAnterior = inimigoRoot.Position
+        local inimigoPredito = inimigoRoot.Position + inimigoVel * 0.5
+        fugirMemoriaTimer = fugirMemoriaTimer + dt
+        if fugirMemoriaTimer >= 0.5 then
+            fugirMemoriaTimer = 0
+            table.insert(fugirMemoriaPosicoes, meuRoot.Position)
+            if #fugirMemoriaPosicoes > FUGIR_MEMORIA_MAX then table.remove(fugirMemoriaPosicoes, 1) end
+        end
+        if fantasmaAtivo then
+            fantasmaTimer = fantasmaTimer - dt
+            if fantasmaTimer <= 0 then desativarFantasma() end
+        end
+        local speed = 16
+        if dist < 3 then speed = 300
+        elseif dist < fugirDistanciaMinima then speed = math.clamp(250 - dist * 20, 150, 250)
+        elseif dist < 15 then speed = math.clamp(150 - dist * 5, 80, 150)
+        elseif dist < fugirDistanciaSegura then speed = math.clamp(80 - dist, 30, 80)
+        else speed = 16 end
+        meuHum.WalkSpeed = speed
+        if dist < 3 then
+            local melhor = melhorDirecaoFuga(meuRoot, inimigoPredito)
+            local tpDist = math.min(melhor.espaco * 0.85, 35)
+            meuRoot.CFrame = CFrame.new(meuRoot.Position + melhor.direcao * tpDist)
+            meuHum.Jump = true
+            return
+        end
+        if dist < fugirDistanciaMinima then
+            local melhor = melhorDirecaoFuga(meuRoot, inimigoPredito)
+            local moveDist = math.min(melhor.espaco * 0.8, 3) * 1.5
+            local novaPos = meuRoot.Position + melhor.direcao * moveDist
+            meuRoot.CFrame = CFrame.new(novaPos, novaPos - melhor.direcao)
+            local becoCount = 0
+            for i = 0, 7 do
+                local ang = (i / 8) * math.pi * 2
+                local dir = Vector3.new(math.cos(ang), 0, math.sin(ang))
+                local rp = RaycastParams.new()
+                rp.FilterType = Enum.RaycastFilterType.Exclude
+                pcall(function() rp.FilterDescendantsInstances = {LocalPlayer.Character} end)
+                local r = Workspace:Raycast(meuRoot.Position, dir * 8, rp)
+                if r and r.Distance < 4 then becoCount = becoCount + 1 end
+            end
+            if becoCount >= 5 and not fantasmaAtivo then ativarFantasma() end
+            return
+        end
+        fugirJukeTimer = fugirJukeTimer + dt
+        if dist < 12 and fugirJukeTimer >= fugirJukeInterval then
+            fugirJukeTimer = 0
+            local dirFuga = (meuRoot.Position - inimigoPredito).Unit
+            dirFuga = Vector3.new(dirFuga.X, 0, dirFuga.Z).Unit
+            local jukeAng = (math.random() > 0.5 and 1 or -1) * math.rad(math.random(70, 110))
+            local jukeDirX = dirFuga.X * math.cos(jukeAng) - dirFuga.Z * math.sin(jukeAng)
+            local jukeDirZ = dirFuga.X * math.sin(jukeAng) + dirFuga.Z * math.cos(jukeAng)
+            local jukeDir = Vector3.new(jukeDirX, 0, jukeDirZ).Unit
+            local rp = RaycastParams.new()
+            rp.FilterType = Enum.RaycastFilterType.Exclude
+            pcall(function() rp.FilterDescendantsInstances = {LocalPlayer.Character} end)
+            local r = Workspace:Raycast(meuRoot.Position, jukeDir * 15, rp)
+            if not r or r.Distance > 8 then
+                local jDist = math.min(r and r.Distance * 0.7 or 10, 10)
+                meuRoot.CFrame = CFrame.new(meuRoot.Position + jukeDir * jDist)
+            end
+        end
+        if dist < fugirDistanciaSegura then
+            local melhor = melhorDirecaoFuga(meuRoot, inimigoPredito)
+            local moveDist = math.min(melhor.espaco * 0.7, 2.5)
+            local novaPos = meuRoot.Position + melhor.direcao * moveDist
+            meuRoot.CFrame = CFrame.new(novaPos, novaPos - melhor.direcao)
+            meuHum.Jump = (dist < 10)
+        end
+    end)
+end
+
+local function pararFugir()
+    fugindo = false
+    if conexaoFugir then conexaoFugir:Disconnect(); conexaoFugir = nil end
+    desativarFantasma()
+    limparHighlightPerseguidor()
+    local hum = getHumanoid(LocalPlayer)
+    if hum then hum.WalkSpeed = speedAtivo and speedValor or walkSpeedOriginal end
+    fugirMemoriaPosicoes = {}
+    inimigoPosAnterior = nil
+    safeNotify("Parou!", "Parou de fugir" .. (playerPerseguidorNome and (" de " .. playerPerseguidorNome) or ""))
+    playerPerseguidor = nil
+end
+
+-- ============================================================
+-- TRANSPARENCIA DO MENU
+-- ============================================================
+local function aplicarTransparencia(t)
+    local function aplicarEmGui(gui)
+        pcall(function()
+            for _, child in pairs(gui:GetDescendants()) do
+                pcall(function()
+                    if child:IsA("Frame") or child:IsA("ScrollingFrame") or child:IsA("CanvasGroup") then
+                        if not child:GetAttribute("_OBG") then child:SetAttribute("_OBG", child.BackgroundTransparency) end
+                        local orig = child:GetAttribute("_OBG") or 0
+                        child.BackgroundTransparency = orig + (1 - orig) * t
+                    end
+                    if child:IsA("ImageLabel") or child:IsA("ImageButton") then
+                        if not child:GetAttribute("_OBG") then child:SetAttribute("_OBG", child.BackgroundTransparency) end
+                        if not child:GetAttribute("_OIG") then child:SetAttribute("_OIG", child.ImageTransparency) end
+                        local origBg = child:GetAttribute("_OBG") or 0
+                        local origImg = child:GetAttribute("_OIG") or 0
+                        child.BackgroundTransparency = origBg + (1 - origBg) * t
+                        child.ImageTransparency = origImg + (1 - origImg) * t
+                    end
+                    if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
+                        if not child:GetAttribute("_OBG") then child:SetAttribute("_OBG", child.BackgroundTransparency) end
+                        local origBg = child:GetAttribute("_OBG") or 0
+                        child.BackgroundTransparency = origBg + (1 - origBg) * t
+                    end
+                end)
+            end
+        end)
+    end
+    pcall(function()
+        for _, gui in pairs(game:GetService("CoreGui"):GetChildren()) do
+            if gui:IsA("ScreenGui") then aplicarEmGui(gui) end
+        end
+    end)
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            for _, gui in pairs(pg:GetChildren()) do
+                if gui:IsA("ScreenGui") then aplicarEmGui(gui) end
+            end
+        end
+    end)
+    pcall(function()
+        local h = gethui and gethui()
+        if h then
+            for _, gui in pairs(h:GetChildren()) do
+                if gui:IsA("ScreenGui") then aplicarEmGui(gui) end
+            end
+        end
+    end)
+end
+
+-- ============================================================
+-- PARAR TUDO
+-- ============================================================
+local function pararTudo()
+    if seguindo then pararSeguir() end
+    if fugindo then pararFugir() end
+    if selecaoPorToque then desativarSelecaoPorToque() end
+    setSpeed(false, 16)
+    pararTodasAnimacoes()
+    task.spawn(function() for i = 1, 5 do task.wait(0.1); forcarPararTodasTracks() end end)
+    limparHighlightSelecionado()
+    limparHighlightPerseguidor()
+    estaDancando = false
+    alvoEstaParado = false
+    dancaCancelada = true
+    pcall(function()
+        if LocalPlayer.Character then
+            for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.Transparency = 0
+                elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency = 0 end
+            end
+        end
+    end)
+    safeNotify("Tudo Parado", "Tudo desativado.")
+end
+
+-- ============================================================
+-- SISTEMA DE CLONES v4.1 - CORRIGIDO
+-- ============================================================
+local function acharChao(posXZ, posYRef)
+    local posY = posYRef or 100
+    local origem = Vector3.new(posXZ.X, posY + 300, posXZ.Z)
+    local direcao = Vector3.new(0, -600, 0)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local ignoreList = {}
+    pcall(function() if LocalPlayer.Character then table.insert(ignoreList, LocalPlayer.Character) end end)
+    pcall(function() if clonePasta then table.insert(ignoreList, clonePasta) end end)
+    rayParams.FilterDescendantsInstances = ignoreList
+    local result = Workspace:Raycast(origem, direcao, rayParams)
+    if result then
+        return result.Position + Vector3.new(0, 3, 0)
+    end
+    return Vector3.new(posXZ.X, posY + 3, posXZ.Z)
+end
+
+local function copiarParte(original, parent)
+    local p = Instance.new(original.ClassName)
+    p.Name = original.Name
+    p.Size = original.Size
+    p.CFrame = original.CFrame
+    p.Color = original.Color
+    p.Material = original.Material
+    p.Transparency = original.Transparency
+    p.Reflectance = original.Reflectance
+    if original:IsA("MeshPart") then
+        pcall(function() p.MeshId = original.MeshId end)
+        pcall(function() p.TextureID = original.TextureID end)
+    end
+    if original:IsA("BasePart") then
+        p.TopSurface = original.TopSurface
+        p.BottomSurface = original.BottomSurface
+    end
+    p.Parent = parent
+    return p
+end
+
+local function copiarAcessorio(original, parent)
+    local ok, acc = pcall(function()
+        local oldArch = original.Archivable
+        original.Archivable = true
+        local c = original:Clone()
+        original.Archivable = oldArch
+        return c
+    end)
+    if ok and acc then
+        acc.Parent = parent
+        return acc
+    end
+    return nil
+end
+
+local function criarCloneManual(alvoPlayer, indice, totalNovos)
+    addLog("Criando clone #" .. tostring(cloneContador + 1) .. "...", "CLONE")
+
+    local character = LocalPlayer.Character
+    if not character then addLog("ERRO: Sem character!", "ERRO"); return nil end
+
+    local meuRoot = character:FindFirstChild("HumanoidRootPart")
+    if not meuRoot then addLog("ERRO: Sem HRP!", "ERRO"); return nil end
+
+    local alvoRoot = getRootPart(alvoPlayer)
+    if not alvoRoot then addLog("ERRO: Alvo sem HRP!", "ERRO"); return nil end
+
+    local cloneModel = Instance.new("Model")
+    cloneContador = cloneContador + 1
+    cloneModel.Name = "DeltaClone_" .. cloneContador
+
+    local partsMap = {}
+    local hasHRP = false
+
+    for _, obj in pairs(character:GetChildren()) do
+        if obj:IsA("BasePart") then
+            local newPart = copiarParte(obj, cloneModel)
+            partsMap[obj.Name] = newPart
+            if obj.Name == "HumanoidRootPart" then hasHRP = true end
+
+        elseif obj:IsA("Accessory") then
+            copiarAcessorio(obj, cloneModel)
+
+        elseif obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") then
+            pcall(function() local c = obj:Clone(); c.Parent = cloneModel end)
+
+        elseif obj:IsA("BodyColors") then
+            pcall(function() local c = obj:Clone(); c.Parent = cloneModel end)
+        end
+    end
+
+    -- Copiar decals do face (apenas uma vez)
+    for _, decal in pairs(character:GetDescendants()) do
+        if decal:IsA("Decal") and decal.Parent and decal.Parent:IsA("BasePart") then
+            local parentClone = partsMap[decal.Parent.Name]
+            if parentClone then
+                pcall(function()
+                    local d = Instance.new("Decal")
+                    d.Name = decal.Name
+                    d.Face = decal.Face
+                    d.Texture = decal.Texture
+                    d.Transparency = decal.Transparency
+                    d.Parent = parentClone
+                end)
+            end
+        end
+    end
+
+    if not hasHRP then
+        local hrp = Instance.new("Part")
+        hrp.Name = "HumanoidRootPart"
+        hrp.Size = Vector3.new(2, 2, 1)
+        hrp.Transparency = 1
+        hrp.CanCollide = false
+        hrp.Parent = cloneModel
+        partsMap["HumanoidRootPart"] = hrp
+    end
+
+    local cloneHum = Instance.new("Humanoid")
+    cloneHum.MaxHealth = 99999
+    cloneHum.Health = 99999
+    cloneHum.WalkSpeed = cloneVelocidade
+    cloneHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    cloneHum.NameDisplayDistance = 0
+    cloneHum.HealthDisplayDistance = 0
+    cloneHum.PlatformStand = false
+    cloneHum.AutoRotate = true
+    cloneHum.BreakJointsOnDeath = false
+    cloneHum.Parent = cloneModel
+
+    pcall(function()
+        cloneHum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        cloneHum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+        cloneHum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        cloneHum:ChangeState(Enum.HumanoidStateType.Running)
+    end)
+
+    local animator = Instance.new("Animator")
+    animator.Parent = cloneHum
+
+    local hrp = cloneModel:FindFirstChild("HumanoidRootPart")
+    if hrp then cloneModel.PrimaryPart = hrp end
+
+    for _, part in pairs(cloneModel:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Transparency = 0
+            part.CanCollide = true
+            part.Anchored = false
+            part.CastShadow = true
+            part.CanQuery = true
+            part.CanTouch = true
+        end
+    end
+    if hrp then
+        hrp.Transparency = 1
+        hrp.CanCollide = false
+        hrp.Anchored = true
+    end
+
+    local angulo = (indice / math.max(totalNovos, 1)) * math.pi * 2
+    local raio = math.random(8, cloneSpawnRaio)
+    local spawnXZ = Vector3.new(
+        meuRoot.Position.X + math.cos(angulo) * raio,
+        0,
+        meuRoot.Position.Z + math.sin(angulo) * raio
+    )
+    local spawnPos = acharChao(spawnXZ, meuRoot.Position.Y)
+
+    if hrp then hrp.CFrame = CFrame.new(spawnPos, alvoRoot.Position) end
+
+    if not clonePasta or not clonePasta.Parent then
+        clonePasta = Instance.new("Folder")
+        clonePasta.Name = "DELTA_CLONES"
+        clonePasta.Parent = Workspace
+    end
+
+    cloneModel.Parent = clonePasta
+
+    task.wait(0.1)
+    pcall(function() cloneHum:ChangeState(Enum.HumanoidStateType.Running) end)
+
+    task.spawn(function()
+        task.wait(0.8)
+        if hrp and hrp.Parent then
+            hrp.Anchored = false
+            for _, part in pairs(cloneModel:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    part.CanCollide = true
+                    part.Anchored = false
+                end
+            end
+        end
+    end)
+
+    local hl = Instance.new("Highlight")
+    hl.Name = "DeltaCloneHL"
+    hl.FillTransparency = 0.7
+    hl.FillColor = Color3.fromRGB(0, 200, 255)
+    hl.OutlineColor = Color3.fromRGB(0, 150, 255)
+    hl.OutlineTransparency = 0
+    hl.Parent = cloneModel
+
+    local totalAtual = 0
+    for _, c in ipairs(clonesAtivos) do
+        if c.modelo and c.modelo.Parent then totalAtual = totalAtual + 1 end
+    end
+    totalAtual = totalAtual + 1
+
+    local cd = {
+        id = cloneContador,
+        modelo = cloneModel,
+        conexao = nil,
+        indiceRoda = totalAtual,
+        alvo = alvoPlayer,
+        animAndarTrack = nil,
+        animDancaTrack = nil,
+        dancando = false,
+        alvoUltimaPos = nil,
+        alvoParadoTimer = 0,
+        alvoEstaParado = false,
+        prontoPraAndar = false,
+        waypoints = {},
+        waypointIndex = 1,
+        pathTimer = 0,
+        ultimaPosAlvo = nil,
     }
-    
-    for _, motor in ipairs(char:GetDescendants()) do
-        if motor:IsA("Motor6D") then
-            for key, aliases in pairs(mapping) do
-                if bodyMotors[key] then continue end -- Evita duplicatas
-                for _, alias in ipairs(aliases) do
-                    if motor.Name == alias then
-                        bodyMotors[key] = {
-                            motor = motor,
-                            originalC0 = motor.C0,
-                            originalC1 = motor.C1
-                        }
+
+    task.spawn(function()
+        task.wait(1.0)
+        cd.prontoPraAndar = true
+        addLog("Clone #" .. cd.id .. " pronto!", "OK")
+    end)
+
+    cd.conexao = RunService.Heartbeat:Connect(function(dt)
+        if not cd.modelo or not cd.modelo.Parent then
+            if cd.conexao then cd.conexao:Disconnect(); cd.conexao = nil end
+            return
+        end
+
+        local cRootNow = cd.modelo:FindFirstChild("HumanoidRootPart")
+        local cHumNow = cd.modelo:FindFirstChildOfClass("Humanoid")
+        if not cRootNow or not cHumNow then return end
+
+        if cHumNow.Health < cHumNow.MaxHealth then cHumNow.Health = cHumNow.MaxHealth end
+
+        pcall(function()
+            local state = cHumNow:GetState()
+            if state == Enum.HumanoidStateType.Dead or
+               state == Enum.HumanoidStateType.Ragdoll or
+               state == Enum.HumanoidStateType.FallingDown then
+                cHumNow:ChangeState(Enum.HumanoidStateType.Running)
+            end
+        end)
+
+        if not cd.prontoPraAndar then return end
+
+        local targetAlvo = cd.alvo or cloneAlvo
+        if not targetAlvo then return end
+        local tRoot = getRootPart(targetAlvo)
+        if not tRoot then return end
+
+        local distancia = (cRootNow.Position - tRoot.Position).Magnitude
+
+        local alvoPos = tRoot.Position
+        local cloneAlvoParou = false
+        if cd.alvoUltimaPos then
+            local deltaMov = (Vector3.new(alvoPos.X, 0, alvoPos.Z) - Vector3.new(cd.alvoUltimaPos.X, 0, cd.alvoUltimaPos.Z)).Magnitude
+            local tVel = Vector3.new(0, 0, 0)
+            pcall(function() tVel = tRoot.AssemblyLinearVelocity or Vector3.new(0, 0, 0) end)
+            local tVelH = Vector3.new(tVel.X, 0, tVel.Z).Magnitude
+            local tHum = targetAlvo.Character and targetAlvo.Character:FindFirstChildOfClass("Humanoid")
+            local tMovendo = tHum and tHum.MoveDirection.Magnitude > 0.1
+            if tVelH < 1 and deltaMov < 0.3 and not tMovendo then
+                cd.alvoParadoTimer = cd.alvoParadoTimer + dt
+                if cd.alvoParadoTimer >= alvoParadoThreshold then cloneAlvoParou = true end
+            else
+                cd.alvoParadoTimer = 0
+            end
+        end
+        cd.alvoUltimaPos = alvoPos
+        cd.alvoEstaParado = cloneAlvoParou
+
+        if cloneDancar and cloneAlvoParou and distancia < cloneDistancia + 4 then
+            if not cd.dancando then
+                if cd.animAndarTrack then
+                    pcall(function() cd.animAndarTrack:Stop(0) end)
+                    cd.animAndarTrack = nil
+                end
+                pcall(function()
+                    local anim = cHumNow:FindFirstChildOfClass("Animator")
+                    if anim then
+                        for _, t in pairs(anim:GetPlayingAnimationTracks()) do
+                            pcall(function() t:Stop(0) end)
+                        end
+                    end
+                end)
+                local dancaData = DANCAS[animDancaAtual]
+                if dancaData then
+                    local anim = Instance.new("Animation")
+                    anim.AnimationId = dancaData.id
+                    local animator = cHumNow:FindFirstChildOfClass("Animator")
+                    if animator then
+                        local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+                        if ok and track then
+                            track.Looped = true
+                            track.Priority = Enum.AnimationPriority.Action4
+                            track:Play(0.1)
+                            cd.animDancaTrack = track
+                            cd.dancando = true
+                        end
+                    end
+                end
+            end
+            pcall(function()
+                cRootNow.CFrame = CFrame.new(cRootNow.Position, Vector3.new(tRoot.Position.X, cRootNow.Position.Y, tRoot.Position.Z))
+            end)
+            return
+        else
+            if cd.dancando then
+                if cd.animDancaTrack then
+                    pcall(function() cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end)
+                    cd.animDancaTrack = nil
+                end
+                cd.dancando = false
+                cd.animAndarTrack = nil
+            end
+        end
+
+        if not cd.animAndarTrack and not cd.dancando then
+            local andarData = ANIMS_ANDAR[animAndarAtual]
+            if andarData then
+                local anim = Instance.new("Animation")
+                anim.AnimationId = andarData.id
+                local animator = cHumNow:FindFirstChildOfClass("Animator")
+                if animator then
+                    local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+                    if ok and track then
+                        track.Looped = true
+                        track.Priority = Enum.AnimationPriority.Movement
+                        track:Play(0.3)
+                        cd.animAndarTrack = track
+                    end
+                end
+            end
+        end
+
+        cHumNow.WalkSpeed = cloneVelocidade
+
+        local totalClones = 0
+        for _, c in ipairs(clonesAtivos) do
+            if c.modelo and c.modelo.Parent then totalClones = totalClones + 1 end
+        end
+        local angOff = (cd.indiceRoda / math.max(totalClones, 1)) * math.pi * 2
+        local posNaRoda = tRoot.Position + Vector3.new(
+            math.cos(angOff) * cloneDistancia,
+            0,
+            math.sin(angOff) * cloneDistancia
+        )
+
+        if distancia > 80 then
+            local centroRef = getRootPart(LocalPlayer) or tRoot
+            local distTP = math.random(5, 15)
+            local angTP = math.random() * math.pi * 2
+            local tpPos = acharChao(
+                Vector3.new(centroRef.Position.X + math.cos(angTP) * distTP, 0, centroRef.Position.Z + math.sin(angTP) * distTP),
+                centroRef.Position.Y
+            )
+            cRootNow.CFrame = CFrame.new(tpPos, tRoot.Position)
+            cd.waypoints = {}
+            cd.waypointIndex = 1
+            cd.ultimaPosAlvo = nil
+            return
+        end
+
+        local distDaRoda = (cRootNow.Position - posNaRoda).Magnitude
+        if distDaRoda < 3 then
+            pcall(function()
+                cRootNow.CFrame = CFrame.new(cRootNow.Position, Vector3.new(tRoot.Position.X, cRootNow.Position.Y, tRoot.Position.Z))
+            end)
+            return
+        end
+
+        cd.pathTimer = cd.pathTimer + dt
+        local precisaRecalc = false
+        if cd.ultimaPosAlvo == nil then precisaRecalc = true
+        elseif (tRoot.Position - cd.ultimaPosAlvo).Magnitude > 10 then precisaRecalc = true
+        elseif cd.pathTimer > 1.5 then precisaRecalc = true
+        elseif #cd.waypoints == 0 then precisaRecalc = true end
+
+        if precisaRecalc then
+            cd.pathTimer = 0
+            cd.ultimaPosAlvo = tRoot.Position
+            local novaRota = calcularPath(cRootNow.Position, posNaRoda)
+            if novaRota then
+                cd.waypoints = novaRota
+                cd.waypointIndex = 1
+            else
+                pcall(function() cHumNow:MoveTo(posNaRoda) end)
+                return
+            end
+        end
+
+        if #cd.waypoints > 0 and cd.waypointIndex <= #cd.waypoints then
+            local wp = cd.waypoints[cd.waypointIndex]
+            if wp.Action == Enum.PathWaypointAction.Jump then cHumNow.Jump = true end
+            pcall(function() cHumNow:MoveTo(wp.Position) end)
+            if (cRootNow.Position - wp.Position).Magnitude < 4 then
+                cd.waypointIndex = cd.waypointIndex + 1
+            end
+        else
+            pcall(function() cHumNow:MoveTo(posNaRoda) end)
+        end
+    end)
+
+    table.insert(clonesAtivos, cd)
+    addLog("Clone #" .. cd.id .. " criado! Total: " .. #clonesAtivos, "OK")
+    return cd
+end
+
+local function removerClone(cd)
+    pcall(function() if cd.conexao then cd.conexao:Disconnect(); cd.conexao = nil end end)
+    pcall(function() if cd.animAndarTrack then cd.animAndarTrack:Stop(0) end end)
+    pcall(function() if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end end)
+    pcall(function() if cd.modelo and cd.modelo.Parent then cd.modelo:Destroy() end end)
+end
+
+local function removerTodosClones()
+    for _, cd in ipairs(clonesAtivos) do removerClone(cd) end
+    clonesAtivos = {}
+    if clonePasta then
+        pcall(function() for _, c in pairs(clonePasta:GetChildren()) do c:Destroy() end end)
+    end
+    addLog("Todos os clones removidos!", "OK")
+    safeNotify("Clones", "Todos removidos!")
+end
+
+local function getTotalClonesAtivos()
+    local total = 0
+    for _, cd in ipairs(clonesAtivos) do
+        if cd.modelo and cd.modelo.Parent then total = total + 1 end
+    end
+    return total
+end
+
+local function adicionarClones(qtd, alvoPlayer)
+    if not alvoPlayer then safeNotify("Erro", "Selecione um alvo!"); return end
+    if not getRootPart(alvoPlayer) then safeNotify("Erro", alvoPlayer.Name .. " sem personagem!"); return end
+
+    cloneAlvo = alvoPlayer
+    cloneAlvoNome = alvoPlayer.Name
+    local totalAntes = getTotalClonesAtivos()
+
+    addLog("Criando " .. qtd .. " clones...", "CLONE")
+    safeNotify("Clones", "Criando " .. qtd .. " clones...")
+
+    task.spawn(function()
+        local criados = 0
+        for i = 1, qtd do
+            task.wait(0.5)
+            local cd = criarCloneManual(alvoPlayer, totalAntes + i, totalAntes + qtd)
+            if cd then
+                criados = criados + 1
+                local idx = 0
+                for _, c in ipairs(clonesAtivos) do
+                    if c.modelo and c.modelo.Parent then
+                        idx = idx + 1
+                        c.indiceRoda = idx
+                    end
+                end
+            else
+                addLog("Falha ao criar clone #" .. tostring(i), "ERRO")
+            end
+        end
+        local totalFinal = getTotalClonesAtivos()
+        safeNotify("Clones Criados!", criados .. "/" .. qtd .. " clones | Total: " .. totalFinal)
+    end)
+end
+
+local function redirecionarClones(novoAlvo)
+    if not novoAlvo then return end
+    cloneAlvo = novoAlvo
+    cloneAlvoNome = novoAlvo.Name
+    for _, cd in ipairs(clonesAtivos) do
+        cd.alvo = novoAlvo
+        cd.waypoints = {}
+        cd.waypointIndex = 1
+        cd.ultimaPosAlvo = nil
+        cd.pathTimer = 99
+    end
+    addLog("Clones redirecionados para " .. novoAlvo.Name, "OK")
+    safeNotify("Redirecionados", getTotalClonesAtivos() .. " clones -> " .. novoAlvo.Name)
+end
+
+-- ============================================================
+-- ============================================================
+-- CRIACAO DA JANELA E ABAS (CORRIGIDO)
+-- ============================================================
+-- ============================================================
+
+addLog("Criando janela...", "UI")
+
+local Window = Rayfield:CreateWindow({
+    Name = "Delta v10.1",
+    LoadingTitle = "Delta v10.1",
+    LoadingSubtitle = "Correcao total + Diagnostico",
+    ConfigurationSaving = {Enabled = false},
+    Discord = {Enabled = false},
+    KeySystem = false,
+})
+
+if not Window then
+    addLog("ERRO CRITICO: CreateWindow retornou nil!", "ERRO")
+    addLog("Rayfield pode estar com problemas", "ERRO")
+    safeNotify("Erro", "Falha ao criar janela - Rayfield com problema")
+    return
+end
+
+addLog("Janela criada com sucesso!", "OK")
+
+-- Validar metodos essenciais da janela
+if not Window.CreateTab then
+    addLog("ERRO: Window.CreateTab nao existe!", "ERRO")
+    safeNotify("Erro", "API da janela incompleta")
+    return
+end
+
+addLog("API da janela validada", "OK")
+
+-- ============================================================
+-- FUNCAO AUXILIAR PARA CRIAR TAB COM DIAGNOSTICO
+-- ============================================================
+local function criarTabSegura(nome, icone)
+    local ok, tab = pcall(function() return Window:CreateTab(nome, icone) end)
+    if ok and tab then
+        addLog("Aba '" .. nome .. "' criada", "UI")
+        return tab
+    else
+        addLog("ERRO ao criar aba '" .. nome .. "': " .. tostring(tab), "ERRO")
+        return nil
+    end
+end
+
+-- ============================================================
+-- ABA SEGUIR
+-- ============================================================
+do
+    local tab = criarTabSegura("Seguir", 4483362458)
+    if tab then
+        tab:CreateSection("Selecionar Player")
+        tab:CreateDropdown({
+            Name = "Escolher Player",
+            Options = getListaPlayers(),
+            CurrentOption = "Nenhum",
+            MultipleOptions = false,
+            Flag = "DropSeguir",
+            Callback = function(o)
+                if o and o[1] then
+                    local p = getPlayerByName(o[1])
+                    if p then marcarPlayerSelecionado(p) end
+                end
+            end,
+        })
+        tab:CreateInput({
+            Name = "Digitar Nome",
+            PlaceholderText = "Nome do player...",
+            RemoveTextAfterFocusLost = false,
+            Flag = "InputPlayer",
+            Callback = function(t)
+                if t and t ~= "" then selecionarPlayer(t) end
+            end,
+        })
+        tab:CreateSection("Modo de Seguir")
+        tab:CreateDropdown({
+            Name = "Modo",
+            Options = {"Normal (Andar)", "Pathfinding (Andar)", "Encosto (Sentado)"},
+            CurrentOption = "Normal (Andar)",
+            MultipleOptions = false,
+            Flag = "DropModo",
+            Callback = function(o)
+                local modo = o[1]
+                if modo == "Encosto (Sentado)" then modoSeguir = "encosto"
+                elseif modo == "Pathfinding (Andar)" then modoSeguir = "pathfinding"
+                else modoSeguir = "normal" end
+            end,
+        })
+        tab:CreateSection("Acoes")
+        tab:CreateButton({
+            Name = "SEGUIR",
+            Callback = function()
+                local nome = nil
+                pcall(function()
+                    local f = Rayfield.Flags
+                    if f and f.DropSeguir and f.DropSeguir.CurrentOption then
+                        local opt = f.DropSeguir.CurrentOption
+                        nome = type(opt) == "table" and opt[1] or opt
+                    end
+                end)
+                if (not nome or nome == "" or nome == "Nenhum") then
+                    pcall(function()
+                        local f = Rayfield.Flags
+                        if f and f.InputPlayer then
+                            local v = f.InputPlayer.CurrentValue or f.InputPlayer
+                            if type(v) == "string" and v ~= "" then nome = v end
+                        end
+                    end)
+                end
+                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                    nome = playerSelecionadoNome
+                end
+                if not nome or nome == "" or nome == "Nenhum" then
+                    safeNotify("Erro", "Selecione um player!")
+                    return
+                end
+                local p = getPlayerByName(nome)
+                if p then iniciarSeguir(p)
+                else safeNotify("Erro", nome .. " nao encontrado!") end
+            end,
+        })
+        tab:CreateButton({
+            Name = "PARAR",
+            Callback = function()
+                if seguindo then pararSeguir()
+                else safeNotify("Info", "Nao esta seguindo!") end
+            end,
+        })
+        tab:CreateSection("Extras")
+        tab:CreateToggle({
+            Name = "Seguir ao Encostar",
+            CurrentValue = false,
+            Flag = "ToggleToque",
+            Callback = function(v)
+                if v then ativarSelecaoPorToque()
+                else desativarSelecaoPorToque() end
+            end,
+        })
+    end
+end
+
+-- ============================================================
+-- ABA CLONES
+-- ============================================================
+do
+    local tab = criarTabSegura("Clones", 4483362458)
+    if tab then
+        tab:CreateSection("Alvo dos Clones")
+
+        tab:CreateDropdown({
+            Name = "Alvo",
+            Options = getListaPlayers(),
+            CurrentOption = "Nenhum",
+            MultipleOptions = false,
+            Flag = "DropCloneAlvo",
+            Callback = function(o)
+                if o and o[1] then
+                    local p = getPlayerByName(o[1])
+                    if p then cloneAlvo = p; cloneAlvoNome = p.Name; marcarPlayerSelecionado(p) end
+                end
+            end,
+        })
+
+        tab:CreateInput({
+            Name = "Digitar Nome",
+            PlaceholderText = "Nome do alvo...",
+            RemoveTextAfterFocusLost = false,
+            Flag = "InputCloneAlvo",
+            Callback = function(t)
+                if t and t ~= "" then
+                    local p = getPlayerByName(t)
+                    if p then cloneAlvo = p; cloneAlvoNome = p.Name; selecionarPlayer(t) end
+                end
+            end,
+        })
+
+        tab:CreateSection("Adicionar Clones")
+
+        local function getCloneAlvo()
+            local a = cloneAlvo
+            if not a and playerSelecionadoNome then a = getPlayerByName(playerSelecionadoNome) end
+            if not a and playerAlvo then a = playerAlvo end
+            return a
+        end
+
+        tab:CreateButton({
+            Name = "+1 Clone",
+            Callback = function()
+                local a = getCloneAlvo()
+                if a then adicionarClones(1, a)
+                else safeNotify("Erro", "Selecione alvo!") end
+            end
+        })
+
+        tab:CreateButton({
+            Name = "+3 Clones",
+            Callback = function()
+                local a = getCloneAlvo()
+                if a then adicionarClones(3, a)
+                else safeNotify("Erro", "Selecione alvo!") end
+            end
+        })
+
+        tab:CreateButton({
+            Name = "+5 Clones",
+            Callback = function()
+                local a = getCloneAlvo()
+                if a then adicionarClones(5, a)
+                else safeNotify("Erro", "Selecione alvo!") end
+            end
+        })
+
+        tab:CreateButton({
+            Name = "+10 Clones",
+            Callback = function()
+                local a = getCloneAlvo()
+                if a then adicionarClones(10, a)
+                else safeNotify("Erro", "Selecione alvo!") end
+            end
+        })
+
+        tab:CreateSlider({
+            Name = "Quantidade Custom",
+            Range = {1, 50},
+            Increment = 1,
+            Suffix = " clones",
+            CurrentValue = 5,
+            Flag = "SliderCloneQtd",
+            Callback = function() end,
+        })
+
+        tab:CreateButton({
+            Name = "Adicionar (qtd acima)",
+            Callback = function()
+                local a = getCloneAlvo()
+                if not a then safeNotify("Erro", "Selecione alvo!"); return end
+                local qtd = 5
+                pcall(function()
+                    local f = Rayfield.Flags
+                    if f and f.SliderCloneQtd then
+                        local v = f.SliderCloneQtd.CurrentValue or f.SliderCloneQtd
+                        if type(v) == "number" then qtd = math.floor(v) end
+                    end
+                end)
+                adicionarClones(qtd, a)
+            end,
+        })
+
+        tab:CreateSection("Gerenciar")
+
+        tab:CreateButton({
+            Name = "Redirecionar Clones",
+            Callback = function()
+                local a = getCloneAlvo()
+                if a then redirecionarClones(a)
+                else safeNotify("Erro", "Selecione alvo!") end
+            end,
+        })
+
+        tab:CreateButton({
+            Name = "Remover TODOS",
+            Callback = function() removerTodosClones() end
+        })
+
+        tab:CreateSection("Config Clones")
+
+        tab:CreateSlider({
+            Name = "Velocidade",
+            Range = {10, 100},
+            Increment = 2,
+            Suffix = " speed",
+            CurrentValue = 22,
+            Flag = "SliderCloneSpeed",
+            Callback = function(v) cloneVelocidade = v end,
+        })
+
+        tab:CreateSlider({
+            Name = "Distancia (roda)",
+            Range = {2, 20},
+            Increment = 0.5,
+            Suffix = " studs",
+            CurrentValue = 5,
+            Flag = "SliderCloneDist",
+            Callback = function(v) cloneDistancia = v end,
+        })
+
+        tab:CreateSlider({
+            Name = "Raio de Spawn",
+            Range = {5, 50},
+            Increment = 1,
+            Suffix = " studs",
+            CurrentValue = 15,
+            Flag = "SliderCloneRaio",
+            Callback = function(v) cloneSpawnRaio = v end,
+        })
+
+        tab:CreateToggle({
+            Name = "Clones Dancam",
+            CurrentValue = true,
+            Flag = "ToggleCloneDanca",
+            Callback = function(v)
+                cloneDancar = v
+                if not v then
+                    for _, cd in ipairs(clonesAtivos) do
+                        if cd.dancando then
+                            pcall(function() if cd.animDancaTrack then cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end end)
+                            cd.animDancaTrack = nil
+                            cd.dancando = false
+                            cd.animAndarTrack = nil
+                        end
+                    end
+                end
+            end,
+        })
+
+        tab:CreateSection("Info")
+        tab:CreateButton({
+            Name = "Ver Qtd Ativos",
+            Callback = function()
+                local total = getTotalClonesAtivos()
+                safeNotify("Clones Ativos", tostring(total) .. " clones no mapa")
+                addLog("Clones ativos: " .. total, "INFO")
+            end,
+        })
+    end
+end
+
+-- ============================================================
+-- ABA FUGIR
+-- ============================================================
+do
+    local tab = criarTabSegura("Fugir", 4483362458)
+    if tab then
+        tab:CreateSection("FUGA IMPOSSIVEL")
+        tab:CreateDropdown({
+            Name = "Fugir de quem?",
+            Options = getListaPlayers(),
+            CurrentOption = "Nenhum",
+            MultipleOptions = false,
+            Flag = "DropFugir",
+            Callback = function(o)
+                if o and o[1] then
+                    local p = getPlayerByName(o[1])
+                    if p then marcarPlayerSelecionado(p) end
+                end
+            end,
+        })
+        tab:CreateInput({
+            Name = "Digitar Nome",
+            PlaceholderText = "Perseguidor...",
+            RemoveTextAfterFocusLost = false,
+            Flag = "InputFugir",
+            Callback = function(t)
+                if t and t ~= "" then selecionarPlayer(t) end
+            end,
+        })
+        tab:CreateSection("Acoes")
+        tab:CreateButton({
+            Name = "FUGIR!",
+            Callback = function()
+                local nome = nil
+                pcall(function()
+                    local f = Rayfield.Flags
+                    if f and f.DropFugir and f.DropFugir.CurrentOption then
+                        local opt = f.DropFugir.CurrentOption
+                        nome = type(opt) == "table" and opt[1] or opt
+                    end
+                end)
+                if (not nome or nome == "" or nome == "Nenhum") then
+                    pcall(function()
+                        local f = Rayfield.Flags
+                        if f and f.InputFugir then
+                            local v = f.InputFugir.CurrentValue or f.InputFugir
+                            if type(v) == "string" and v ~= "" then nome = v end
+                        end
+                    end)
+                end
+                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                    nome = playerSelecionadoNome
+                end
+                if not nome or nome == "" or nome == "Nenhum" then
+                    safeNotify("Erro", "Selecione de quem fugir!")
+                    return
+                end
+                local p = getPlayerByName(nome)
+                if p then iniciarFugir(p)
+                else safeNotify("Erro", nome .. " nao encontrado!") end
+            end,
+        })
+        tab:CreateButton({
+            Name = "PARAR DE FUGIR",
+            Callback = function()
+                if fugindo then pararFugir()
+                else safeNotify("Info", "Nao esta fugindo!") end
+            end,
+        })
+        tab:CreateSection("Config Fuga")
+        tab:CreateSlider({Name = "Dist Minima", Range = {3, 20}, Increment = 1, Suffix = " studs", CurrentValue = 8, Flag = "SliderDistMin", Callback = function(v) fugirDistanciaMinima = v end})
+        tab:CreateSlider({Name = "Dist Segura", Range = {15, 80}, Increment = 5, Suffix = " studs", CurrentValue = 30, Flag = "SliderFugirDist", Callback = function(v) fugirDistanciaSegura = v end})
+        tab:CreateSlider({Name = "Intervalo Juke", Range = {0.3, 3}, Increment = 0.1, Suffix = "s", CurrentValue = 0.8, Flag = "SliderJuke", Callback = function(v) fugirJukeInterval = v end})
+        tab:CreateSlider({Name = "Duracao Fantasma", Range = {0.5, 5}, Increment = 0.5, Suffix = "s", CurrentValue = 1.5, Flag = "SliderFantasma", Callback = function(v) FANTASMA_DURACAO = v end})
+    end
+end
+
+-- ============================================================
+-- ABA ANIMACOES
+-- ============================================================
+do
+    local tab = criarTabSegura("Anim", 4483362458)
+    if tab then
+        tab:CreateSection("Andar")
+        local na = {}
+        for _, a in ipairs(ANIMS_ANDAR) do table.insert(na, a.nome) end
+        tab:CreateDropdown({
+            Name = "Estilo de Andar",
+            Options = na,
+            CurrentOption = ANIMS_ANDAR[1].nome,
+            MultipleOptions = false,
+            Flag = "DropAndar",
+            Callback = function(o)
+                for i, a in ipairs(ANIMS_ANDAR) do
+                    if a.nome == o[1] then
+                        animAndarAtual = i
+                        if animAndarTrack then pcall(function() animAndarTrack:Stop(0) end); animAndarTrack = nil end
+                        for _, cd in ipairs(clonesAtivos) do
+                            if cd.animAndarTrack then pcall(function() cd.animAndarTrack:Stop(0) end); cd.animAndarTrack = nil end
+                        end
                         break
                     end
                 end
-            end
-        end
-    end
-end
-
-local function animarPersonagem(dt, isMoving, moveSpeed)
-    local t = tick()
-    local breathing = math.sin(t * 1.5) * 0.02
-    
-    if not isMoving then
-        -- Pose Idle de Réptil (corpo baixo, patas abertas)
-        for name, data in pairs(bodyMotors) do
-            local motor = data.motor
-            local target = data.originalC0
-            
-            if name == "LeftShoulder" or name == "RightShoulder" then
-                local side = (name == "LeftShoulder" and -1 or 1)
-                target = target * CFrame.Angles(0, 0, side * math.rad(25))
-            elseif name == "LeftHip" or name == "RightHip" then
-                local side = (name == "LeftHip" and -1 or 1)
-                target = target * CFrame.Angles(0, 0, side * math.rad(25))
-            elseif name == "Root" or name == "Waist" then
-                target = target * CFrame.new(0, -0.2 + breathing, 0)
-            end
-            
-            motor.C0 = motor.C0:Lerp(target, dt * 6)
-        end
-        return
-    end
-    
-    -- ANIMAÇÃO DE RASTEJAR ULTRA-VISÍVEL
-    local speed = 10 + (moveSpeed * 8)
-    animationTime = animationTime + dt * speed
-    
-    local cycle = animationTime
-    local sway = math.sin(cycle) * 0.6 -- Balanço lateral forte
-    local verticalBob = math.abs(math.sin(cycle * 2)) * 0.2
-    
-    for name, data in pairs(bodyMotors) do
-        local motor = data.motor
-        local target = data.originalC0
-        
-        -- Amplitude exagerada para ser vista de longe
-        if name == "LeftShoulder" or name == "RightHip" then
-            local move = math.sin(cycle) * 1.5
-            local lift = math.max(0, math.cos(cycle)) * 0.8
-            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.8, 0, 0)
-        elseif name == "RightShoulder" or name == "LeftHip" then
-            local move = math.sin(cycle + math.pi) * 1.5
-            local lift = math.max(0, math.cos(cycle + math.pi)) * 0.8
-            target = target * CFrame.new(0, lift, move) * CFrame.Angles(move * 0.8, 0, 0)
-        elseif name == "Root" or name == "Waist" then
-            target = target * CFrame.new(sway * 0.5, -0.25 + verticalBob, 0) * CFrame.Angles(0, -sway, 0)
-        elseif name == "Neck" then
-            target = target * CFrame.Angles(0, sway * 1.8, 0)
-        end
-        
-        motor.C0 = motor.C0:Lerp(target, math.clamp(dt * 12, 0, 1))
-    end
-end
-
--- ==============================
--- CABEÇA OLHA PRA CÂMERA (Versão Melhorada)
--- ==============================
-local neckRotation = CFrame.identity -- Para suavização
-
-local function atualizarCabeca(char, surfaceNormal)
-    local neck = nil
-    
-    -- No R15, o Neck costuma ser filho do UpperTorso
-    local upperTorso = char:FindFirstChild("UpperTorso")
-    if upperTorso then
-        neck = upperTorso:FindFirstChild("Neck")
-    end
-    
-    -- Se não achou, tenta no Head (comum no R6)
-    if not neck then
-        local head = char:FindFirstChild("Head")
-        if head then
-            neck = head:FindFirstChild("Neck")
-        end
-    end
-    
-    if not neck or not neck:IsA("Motor6D") then return end
-    
-    local torsoParent = neck.Part0
-    if not torsoParent then return end
-    
-    -- 1. Pega a direção da câmera no mundo
-    local camLook = camera.CFrame.LookVector
-    
-    -- 2. Converte essa direção para o espaço local do TORSO
-    local localLook = torsoParent.CFrame:VectorToObjectSpace(camLook)
-    
-    -- 3. Calcula os ângulos
-    -- No Roblox, a frente padrão do torso é -Z
-    -- Queremos girar o pescoço para que a cabeça aponte para localLook
-    local yaw = math.atan2(-localLook.X, -localLook.Z)
-    local pitch = math.asin(math.clamp(localLook.Y, -0.9, 0.9))
-    
-    -- Limites (Lagatixas têm pescoços flexíveis, mas não 360)
-    yaw = math.clamp(yaw, -math.rad(80), math.rad(80))
-    pitch = math.clamp(pitch, -math.rad(60), math.rad(60))
-    
-    -- 4. Suavização (Lerp) para não ser instantâneo e tremer
-    local targetRot = CFrame.Angles(pitch, yaw, 0)
-    neckRotation = neckRotation:Lerp(targetRot, 0.2)
-    
-    -- 5. Aplica sobre a C0 ORIGINAL que salvamos no ligar()
-    -- Se não estiver no bodyMotors (algo deu errado), usa a C0 atual (risco de drift)
-    local baseC0 = neck.C0
-    if bodyMotors["Neck"] then
-        baseC0 = bodyMotors["Neck"].originalC0
-    end
-    
-    neck.C0 = baseC0 * neckRotation
-end
-
--- ==============================
--- CONTROLES MOBILE COM SETAS
--- ==============================
-local function criarControlesMobile()
-    local gui = player.PlayerGui:FindFirstChild("LagatixaGUI")
-    if not gui then return end
-
-    local controls = Instance.new("Frame")
-    controls.Name = "MobileControls"
-    controls.Size = UDim2.new(1, 0, 1, 0)
-    controls.BackgroundTransparency = 1
-    controls.Parent = gui
-
-    local moveX = 0
-    local moveZ = 0
-    local wantsJump = false
-
-    local function criarSeta(nome, texto, posX, posY, parentFrame)
-        local btn = Instance.new("TextButton")
-        btn.Name = nome
-        btn.Size = UDim2.new(0, 65, 0, 65)
-        btn.Position = UDim2.new(0, posX, 0, posY)
-        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-        btn.BackgroundTransparency = 0.3
-        btn.BorderSizePixel = 0
-        btn.Text = texto
-        btn.TextSize = 32
-        btn.TextColor3 = Color3.fromRGB(200, 220, 255)
-        btn.Font = Enum.Font.GothamBold
-        btn.Parent = parentFrame
-        btn.AutoButtonColor = false
-
-        local corner = Instance.new("UICorner", btn)
-        corner.CornerRadius = UDim.new(0, 12)
-
-        local stroke = Instance.new("UIStroke", btn)
-        stroke.Color = Color3.fromRGB(0, 150, 255)
-        stroke.Thickness = 2
-        stroke.Transparency = 0.4
-
-        return btn
-    end
-
-    -- D-PAD
-    local dpadFrame = Instance.new("Frame")
-    dpadFrame.Name = "DPad"
-    dpadFrame.Size = UDim2.new(0, 220, 0, 220)
-    dpadFrame.Position = UDim2.new(0, 20, 1, -240)
-    dpadFrame.BackgroundTransparency = 1
-    dpadFrame.ZIndex = 10
-    dpadFrame.Parent = controls
-
-    local btnCima   = criarSeta("Cima",   "▲", 70, 0,   dpadFrame)
-    local btnBaixo  = criarSeta("Baixo",  "▼", 70, 140, dpadFrame)
-    local btnEsq    = criarSeta("Esq",    "◀", 0,  70,  dpadFrame)
-    local btnDir    = criarSeta("Dir",     "▶", 140, 70, dpadFrame)
-
-    local centro = Instance.new("Frame")
-    centro.Size = UDim2.new(0, 55, 0, 55)
-    centro.Position = UDim2.new(0, 75, 0, 75)
-    centro.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
-    centro.BackgroundTransparency = 0.5
-    centro.BorderSizePixel = 0
-    centro.Parent = dpadFrame
-    Instance.new("UICorner", centro).CornerRadius = UDim.new(0, 10)
-
-    -- BOTÃO PULO
-    local jumpBtn = Instance.new("TextButton")
-    jumpBtn.Name = "JumpBtn"
-    jumpBtn.Size = UDim2.new(0, 90, 0, 90)
-    jumpBtn.Position = UDim2.new(1, -120, 1, -160)
-    jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
-    jumpBtn.BackgroundTransparency = 0.2
-    jumpBtn.BorderSizePixel = 0
-    jumpBtn.Text = "⬆"
-    jumpBtn.TextSize = 42
-    jumpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    jumpBtn.Font = Enum.Font.GothamBold
-    jumpBtn.AutoButtonColor = false
-    jumpBtn.Parent = controls
-
-    Instance.new("UICorner", jumpBtn).CornerRadius = UDim.new(1, 0)
-    local jumpStroke = Instance.new("UIStroke", jumpBtn)
-    jumpStroke.Color = Color3.fromRGB(0, 255, 150)
-    jumpStroke.Thickness = 3
-
-    local jumpLabel = Instance.new("TextLabel")
-    jumpLabel.Size = UDim2.new(1, 0, 0, 20)
-    jumpLabel.Position = UDim2.new(0, 0, 1, 5)
-    jumpLabel.BackgroundTransparency = 1
-    jumpLabel.Text = "PULO"
-    jumpLabel.TextColor3 = Color3.fromRGB(0, 220, 120)
-    jumpLabel.TextSize = 14
-    jumpLabel.Font = Enum.Font.GothamBold
-    jumpLabel.Parent = jumpBtn
-    jumpBtn.ZIndex = 10
-
-    -- ESTADO DAS SETAS
-    local pressing = { Cima = false, Baixo = false, Esq = false, Dir = false }
-
-    local function atualizarMove()
-        moveZ = 0
-        moveX = 0
-        if pressing.Cima then moveZ = moveZ + 1 end
-        if pressing.Baixo then moveZ = moveZ - 1 end
-        if pressing.Esq then moveX = moveX - 1 end
-        if pressing.Dir then moveX = moveX + 1 end
-    end
-
-    local corNormal  = Color3.fromRGB(30, 30, 50)
-    local corPress   = Color3.fromRGB(0, 120, 255)
-
-    local function conectarSeta(btn, nome)
-        btn.MouseButton1Down:Connect(function()
-            pressing[nome] = true
-            btn.BackgroundColor3 = corPress
-            btn.BackgroundTransparency = 0.1
-            atualizarMove()
-        end)
-        
-        -- Garante que o movimento pare mesmo se o dedo sair do botão
-        btn.MouseButton1Up:Connect(function()
-            pressing[nome] = false
-            btn.BackgroundColor3 = corNormal
-            btn.BackgroundTransparency = 0.3
-            atualizarMove()
-        end)
-        
-        btn.MouseLeave:Connect(function()
-            if pressing[nome] then
-                pressing[nome] = false
-                btn.BackgroundColor3 = corNormal
-                btn.BackgroundTransparency = 0.3
-                atualizarMove()
-            end
-        end)
-    end
-
-    conectarSeta(btnCima,  "Cima")
-    conectarSeta(btnBaixo, "Baixo")
-    conectarSeta(btnEsq,   "Esq")
-    conectarSeta(btnDir,    "Dir")
-
-    jumpBtn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            wantsJump = true
-            jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-            jumpBtn.BackgroundTransparency = 0.1
-        end
-    end)
-    jumpBtn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            wantsJump = false
-            jumpBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 80)
-            jumpBtn.BackgroundTransparency = 0.2
-        end
-    end)
-
-    return {
-        getMoveX = function() return moveX end,
-        getMoveZ = function() return moveZ end,
-        getJump = function() return wantsJump end,
-        resetJump = function() wantsJump = false end,
-        destroy = function() controls:Destroy() end,
-    }
-end
-
--- ==============================
--- LIGAR
--- ==============================
-local function ligar()
-    local char = player.Character
-    if not char then return end
-
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-
-    if not hrp or not hum then return end
-
-    -- Para animações padrão do Roblox
-    local animate = char:FindFirstChild("Animate")
-    if animate then
-        animate.Disabled = true
-    end
-
-    -- Para todas as animações atuais
-    for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-        track:Stop(0)
-    end
-
-    -- Limpeza de acessórios indesejados
-    removerRabo(char)
-    
-    -- Encontra os motors para animação manual
-    encontrarMotors(char)
-    
-    hum.PlatformStand = true
-    hum.AutoRotate = false -- CRÍTICO: Para os outros verem sua rotação correta
-    hrp.Anchored = false
-
-    local bodyVel = Instance.new("BodyVelocity")
-    bodyVel.MaxForce = Vector3.new(1, 1, 1) * 1e8 -- Força bruta para replicação
-    bodyVel.Velocity = Vector3.zero
-    bodyVel.Parent = hrp
-
-    local bodyGyro = Instance.new("BodyGyro")
-    bodyGyro.MaxTorque = Vector3.new(1, 1, 1) * 1e8 -- Força bruta para replicação
-    bodyGyro.P = 10000
-    bodyGyro.D = 800
-    bodyGyro.CFrame = hrp.CFrame
-    bodyGyro.Parent = hrp
-
-    mobileControls = criarControlesMobile()
-    if not mobileControls then
-        warn("Erro ao criar controles mobile!")
-        return
-    end
-
-    local surfaceNormal = Vector3.new(0, 1, 0)
-    local verticalVelocity = 0
-    local isGrounded = false
-    local canJump = true
-    local currentForward = Vector3.new(0, 0, -1)
-    local jumpingFromSurface = false
-    local jumpSurfaceNormal = Vector3.new(0, 1, 0)
-
-    loop = RunService.Heartbeat:Connect(function(dt)
-        if not ativo then return end
-        if not char or not char.Parent then return end
-        if not hrp or not hrp.Parent then return end
-
-        local mx = mobileControls.getMoveX()
-        local mz = mobileControls.getMoveZ()
-        local wantsJump = mobileControls.getJump()
-
-        -- Determina se está se movendo (Prioridade para MoveDirection - Mobile/PC)
-        local inputMove = Vector3.new(mx, 0, mz)
-        local realMove = hum.MoveDirection
-        local isMoving = inputMove.Magnitude > 0.1 or realMove.Magnitude > 0.1
-        
-        -- Atualiza estado da animação
-        animState.isMoving = isMoving
-        animState.moveSpeed = math.max(inputMove.Magnitude, realMove.Magnitude)
-        
-        -- Força o estado Physics para replicação de orientação
-        hum:ChangeState(Enum.HumanoidStateType.Physics)
-        
-        -- Anima o personagem apenas quando estiver se movendo
-        if isMoving then
-            animarPersonagem(dt, isMoving, animState.moveSpeed)
-        else
-            animarPersonagem(dt, false, 0)
-        end
-
-        -- DIREÇÕES DA CÂMERA
-        local camCF = camera.CFrame
-        local camLook = camCF.LookVector
-        local camRight = camCF.RightVector
-
-        -- Projeta na superfície
-        local forward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
-        if forward.Magnitude > 0.01 then
-            forward = forward.Unit
-        else
-            forward = Vector3.new(0, 0, -1)
-        end
-
-        local right = (camRight - camRight:Dot(surfaceNormal) * surfaceNormal)
-        if right.Magnitude > 0.01 then
-            right = right.Unit
-        else
-            right = Vector3.new(1, 0, 0)
-        end
-
-        local moveDirWorld = forward * mz + right * mx
-        local isMovingWorld = moveDirWorld.Magnitude > 0.1
-
-        if isMovingWorld then
-            currentForward = moveDirWorld.Unit
-        else
-            -- QUANDO PARADO: corpo olha na direção da câmera (projetada na superfície)
-            local camForward = (camLook - camLook:Dot(surfaceNormal) * surfaceNormal)
-            if camForward.Magnitude > 0.01 then
-                currentForward = currentForward:Lerp(camForward.Unit, dt * 5)
-                if currentForward.Magnitude > 0 then
-                    currentForward = currentForward.Unit
+            end,
+        })
+        tab:CreateSection("Danca")
+        tab:CreateToggle({
+            Name = "Dancar quando alvo para",
+            CurrentValue = true,
+            Flag = "ToggleDancar",
+            Callback = function(v)
+                dancarAoParar = v
+                if not v and estaDancando then pararDanca() end
+            end,
+        })
+        tab:CreateSlider({Name = "Tempo para dancar", Range = {0.3, 3}, Increment = 0.1, Suffix = "s", CurrentValue = 0.8, Flag = "SliderDancaDelay", Callback = function(v) alvoParadoThreshold = v end})
+        local nd = {}
+        for _, d in ipairs(DANCAS) do table.insert(nd, d.nome) end
+        tab:CreateDropdown({
+            Name = "Escolher Danca",
+            Options = nd,
+            CurrentOption = DANCAS[1].nome,
+            MultipleOptions = false,
+            Flag = "DropDanca",
+            Callback = function(o)
+                for i, d in ipairs(DANCAS) do
+                    if d.nome == o[1] then
+                        animDancaAtual = i
+                        if estaDancando then
+                            pararDanca()
+                            task.spawn(function() task.wait(0.15); iniciarDanca(true) end)
+                        end
+                        for _, cd in ipairs(clonesAtivos) do
+                            if cd.dancando and cd.animDancaTrack then
+                                pcall(function() cd.animDancaTrack:Stop(0); cd.animDancaTrack:Destroy() end)
+                                cd.animDancaTrack = nil
+                                cd.dancando = false
+                            end
+                        end
+                        break
+                    end
                 end
+            end,
+        })
+        tab:CreateSection("Testar")
+        tab:CreateButton({Name = "Dancar Agora!", Callback = function() dancaCancelada = false; task.spawn(function() iniciarDanca(true) end) end})
+        tab:CreateButton({
+            Name = "Testar Andar",
+            Callback = function()
+                pararTodasAnimacoes()
+                local ad = ANIMS_ANDAR[animAndarAtual]
+                if ad then animAndarTrack = tocarAnimacao(ad.id, true, 0.2) end
             end
-        end
-
-        -- MOVIMENTO LATERAL
-        local lateralVel = Vector3.zero
-        if isMovingWorld then
-            lateralVel = moveDirWorld.Unit * WALK_SPEED
-        end
-
-        -- DETECÇÃO DE SUPERFÍCIE
-        local hit, dist = raycastChao(hrp.Position, char)
-
-        local isFloor = false
-        if hit then
-            isFloor = hit.Normal:Dot(Vector3.new(0, 1, 0)) > 0.8
-        end
-
-        if hit and dist < 5 then
-            surfaceNormal = surfaceNormal:Lerp(hit.Normal, dt * 10)
-            if surfaceNormal.Magnitude > 0 then
-                surfaceNormal = surfaceNormal.Unit
-            else
-                surfaceNormal = Vector3.new(0, 1, 0)
+        })
+        tab:CreateButton({
+            Name = "Parar Animacoes",
+            Callback = function()
+                pararTodasAnimacoes()
+                task.spawn(function() for i = 1, 3 do task.wait(0.1); forcarPararTodasTracks() end end)
             end
+        })
+    end
+end
 
-            if dist < STICK_DIST and verticalVelocity <= 0 then
-                isGrounded = true
-                verticalVelocity = 0
-                jumpingFromSurface = false
+-- ============================================================
+-- ABA CONFIG
+-- ============================================================
+do
+    local tab = criarTabSegura("Config", 4483362458)
+    if tab then
+        tab:CreateSection("Distancia")
+        tab:CreateSlider({Name = "Distancia do Alvo", Range = {1, 20}, Increment = 0.5, Suffix = " studs", CurrentValue = 3, Flag = "SliderDist", Callback = function(v) distanciaSeguir = v end})
+        tab:CreateSection("Speed Hack")
+        tab:CreateToggle({Name = "Speed Hack", CurrentValue = false, Flag = "ToggleSpeed", Callback = function(v) setSpeed(v, speedValor) end})
+        tab:CreateSlider({Name = "Velocidade", Range = {16, 200}, Increment = 2, Suffix = "", CurrentValue = 50, Flag = "SliderSpeed", Callback = function(v) speedValor = v; if speedAtivo then setSpeed(true, v) end end})
+        tab:CreateSection("Invisibilidade")
+        tab:CreateToggle({
+            Name = "Invisivel ao Seguir",
+            CurrentValue = false,
+            Flag = "ToggleInvis",
+            Callback = function(v)
+                modoInvisivel = v
+                if not v and LocalPlayer.Character then
+                    pcall(function()
+                        for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then part.Transparency = 0
+                            elseif part:IsA("Decal") or part:IsA("Texture") then part.Transparency = 0 end
+                        end
+                    end)
+                end
+            end,
+        })
+        tab:CreateSection("Transparencia do Menu")
+        tab:CreateSlider({
+            Name = "Transparencia",
+            Range = {0, 100},
+            Increment = 5,
+            Suffix = "%",
+            CurrentValue = 0,
+            Flag = "SliderTransp",
+            Callback = function(v) aplicarTransparencia(v / 100) end,
+        })
+    end
+end
 
-                local stickForce = (hit.Position + hit.Normal * STICK_DIST - hrp.Position) * 10
-                bodyVel.Velocity = lateralVel + stickForce
-            else
-                isGrounded = false
+-- ============================================================
+-- ABA TELEPORTE
+-- ============================================================
+do
+    local tab = criarTabSegura("TP", 4483362458)
+    if tab then
+        tab:CreateSection("Teleporte")
+        tab:CreateDropdown({
+            Name = "Player",
+            Options = getListaPlayers(),
+            CurrentOption = "Nenhum",
+            MultipleOptions = false,
+            Flag = "DropTP",
+            Callback = function(o)
+                if o[1] then
+                    local p = getPlayerByName(o[1])
+                    if p then marcarPlayerSelecionado(p) end
+                end
+            end,
+        })
+        tab:CreateInput({
+            Name = "Digitar Nome",
+            PlaceholderText = "Nome...",
+            RemoveTextAfterFocusLost = false,
+            Flag = "InputTP",
+            Callback = function(t)
+                if t and t ~= "" then selecionarPlayer(t) end
+            end,
+        })
+        tab:CreateButton({
+            Name = "Teleportar",
+            Callback = function()
+                local nome = nil
+                pcall(function()
+                    local f = Rayfield.Flags
+                    if f and f.DropTP and f.DropTP.CurrentOption then
+                        local o = f.DropTP.CurrentOption
+                        nome = type(o) == "table" and o[1] or o
+                    end
+                end)
+                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                    nome = playerSelecionadoNome
+                end
+                if nome and nome ~= "" and nome ~= "Nenhum" then teleportarParaPlayer(nome)
+                else safeNotify("Erro", "Selecione um player!") end
+            end,
+        })
+        tab:CreateButton({
+            Name = "TP + Seguir",
+            Callback = function()
+                local nome = nil
+                pcall(function()
+                    local f = Rayfield.Flags
+                    if f and f.DropTP and f.DropTP.CurrentOption then
+                        local o = f.DropTP.CurrentOption
+                        nome = type(o) == "table" and o[1] or o
+                    end
+                end)
+                if (not nome or nome == "" or nome == "Nenhum") and playerSelecionadoNome then
+                    nome = playerSelecionadoNome
+                end
+                if nome and nome ~= "" and nome ~= "Nenhum" then
+                    local p = getPlayerByName(nome)
+                    if p then teleportarParaPlayer(nome); task.wait(0.3); iniciarSeguir(p) end
+                else safeNotify("Erro", "Selecione um player!") end
+            end,
+        })
+    end
+end
 
-                if jumpingFromSurface then
-                    verticalVelocity = verticalVelocity - GRAVITY * dt
-                    bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
+-- ============================================================
+-- ABA GERAL
+-- ============================================================
+do
+    local tab = criarTabSegura("Geral", 4483362458)
+    if tab then
+        tab:CreateSection("Controle")
+        tab:CreateButton({
+            Name = "PARAR TUDO",
+            Callback = function()
+                removerTodosClones()
+                pararTudo()
+            end
+        })
+        tab:CreateButton({
+            Name = "Atualizar Lista",
+            Callback = function()
+                local lista = getListaPlayers()
+                for _, d in ipairs({"DropSeguir", "DropTP", "DropFugir", "DropCloneAlvo"}) do
+                    pcall(function()
+                        local f = Rayfield.Flags
+                        if f and f[d] then f[d]:Refresh(lista) end
+                    end)
+                end
+                safeNotify("Atualizado", #lista .. " players")
+            end,
+        })
+    end
+end
+
+-- ============================================================
+-- ABA LOGS
+-- ============================================================
+do
+    local tab = criarTabSegura("Logs", 4483362458)
+    if tab then
+        tab:CreateSection("Sistema de Logs")
+        tab:CreateParagraph({
+            Title = "Como funciona",
+            Content = "Todos os eventos do Delta sao registrados aqui."
+        })
+
+        tab:CreateSection("Acoes")
+        tab:CreateButton({
+            Name = "Copiar Todos os Logs",
+            Callback = function()
+                local texto = table.concat(LogBuffer, "\n")
+                local ok = pcall(function()
+                    if setclipboard then setclipboard(texto)
+                    elseif toclipboard then toclipboard(texto)
+                    else error("Clipboard indisponivel") end
+                end)
+                if ok then
+                    safeNotify("Logs Copiados!", #LogBuffer .. " linhas copiadas")
                 else
-                    verticalVelocity = verticalVelocity - GRAVITY * dt
-                    bodyVel.Velocity = lateralVel + surfaceNormal * verticalVelocity
+                    safeNotify("Info", "Clipboard indisponivel")
                 end
-            end
-        else
-            isGrounded = false
+            end,
+        })
 
-            if jumpingFromSurface then
-                verticalVelocity = verticalVelocity - GRAVITY * dt
-                bodyVel.Velocity = lateralVel + jumpSurfaceNormal * verticalVelocity
+        tab:CreateButton({
+            Name = "Limpar Logs",
+            Callback = function()
+                LogBuffer = {}
+                addLog("--- Logs limpos ---", "INFO")
+                safeNotify("Logs", "Logs limpos!")
+            end,
+        })
 
-                if verticalVelocity < -JUMP_POWER * 2 then
-                    jumpingFromSurface = false
+        tab:CreateSection("Visualizar Logs")
+
+        tab:CreateButton({
+            Name = "Ver Ultimos 20 Logs",
+            Callback = function()
+                local inicio = math.max(1, #LogBuffer - 19)
+                local linhas = {}
+                for i = inicio, #LogBuffer do
+                    table.insert(linhas, LogBuffer[i])
                 end
-            else
-                verticalVelocity = verticalVelocity - GRAVITY * dt
-                bodyVel.Velocity = lateralVel + Vector3.new(0, verticalVelocity, 0)
-                surfaceNormal = surfaceNormal:Lerp(Vector3.new(0, 1, 0), dt * 5)
-            end
-        end
+                local texto = table.concat(linhas, "\n")
+                if texto == "" then texto = "(sem logs)" end
 
-        -- ============================
-        -- PULO
-        -- ============================
-        if wantsJump and isGrounded and canJump then
-            if isFloor then
-                verticalVelocity = JUMP_POWER
-                isGrounded = false
-                jumpingFromSurface = false
-            else
-                jumpSurfaceNormal = surfaceNormal
-                verticalVelocity = JUMP_POWER
-                isGrounded = false
-                jumpingFromSurface = true
-            end
+                local screenGui = Instance.new("ScreenGui")
+                screenGui.Name = "DeltaLogPopup"
+                screenGui.ResetOnSpawn = false
 
-            canJump = false
-            mobileControls.resetJump()
-            task.delay(0.3, function()
-                canJump = true
+                local ok, parent = pcall(function()
+                    if gethui then return gethui() end
+                    return game:GetService("CoreGui")
+                end)
+                if not ok then parent = LocalPlayer:WaitForChild("PlayerGui") end
+                screenGui.Parent = parent
+
+                local frame = Instance.new("Frame")
+                frame.Size = UDim2.new(0, 600, 0, 400)
+                frame.Position = UDim2.new(0.5, -300, 0.5, -200)
+                frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+                frame.BorderSizePixel = 0
+                frame.Parent = screenGui
+
+                local corner = Instance.new("UICorner")
+                corner.CornerRadius = UDim.new(0, 8)
+                corner.Parent = frame
+
+                local title = Instance.new("TextLabel")
+                title.Size = UDim2.new(1, 0, 0, 35)
+                title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+                title.Text = "  Delta Logs (Ultimos " .. #linhas .. ")"
+                title.TextColor3 = Color3.fromRGB(200, 200, 220)
+                title.TextXAlignment = Enum.TextXAlignment.Left
+                title.Font = Enum.Font.GothamBold
+                title.TextSize = 14
+                title.Parent = frame
+
+                local titleCorner = Instance.new("UICorner")
+                titleCorner.CornerRadius = UDim.new(0, 8)
+                titleCorner.Parent = title
+
+                local scrollFrame = Instance.new("ScrollingFrame")
+                scrollFrame.Size = UDim2.new(1, -20, 1, -80)
+                scrollFrame.Position = UDim2.new(0, 10, 0, 40)
+                scrollFrame.BackgroundTransparency = 1
+                scrollFrame.ScrollBarThickness = 6
+                scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+                scrollFrame.Parent = frame
+
+                local logLabel = Instance.new("TextLabel")
+                logLabel.Size = UDim2.new(1, -10, 0, 0)
+                logLabel.AutomaticSize = Enum.AutomaticSize.Y
+                logLabel.BackgroundTransparency = 1
+                logLabel.Text = texto
+                logLabel.TextColor3 = Color3.fromRGB(180, 255, 180)
+                logLabel.TextXAlignment = Enum.TextXAlignment.Left
+                logLabel.TextYAlignment = Enum.TextYAlignment.Top
+                logLabel.Font = Enum.Font.Code
+                logLabel.TextSize = 12
+                logLabel.TextWrapped = true
+                logLabel.Parent = scrollFrame
+
+                task.defer(function()
+                    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, logLabel.TextBounds.Y + 20)
+                    scrollFrame.CanvasPosition = Vector2.new(0, math.max(0, logLabel.TextBounds.Y - scrollFrame.AbsoluteSize.Y))
+                end)
+
+                local copyBtn = Instance.new("TextButton")
+                copyBtn.Size = UDim2.new(0, 120, 0, 30)
+                copyBtn.Position = UDim2.new(1, -130, 1, -38)
+                copyBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+                copyBtn.Text = "Copiar"
+                copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                copyBtn.Font = Enum.Font.GothamBold
+                copyBtn.TextSize = 13
+                copyBtn.Parent = frame
+
+                local copyCorner = Instance.new("UICorner")
+                copyCorner.CornerRadius = UDim.new(0, 6)
+                copyCorner.Parent = copyBtn
+
+                copyBtn.MouseButton1Click:Connect(function()
+                    pcall(function()
+                        local allText = table.concat(LogBuffer, "\n")
+                        if setclipboard then setclipboard(allText)
+                        elseif toclipboard then toclipboard(allText) end
+                    end)
+                    copyBtn.Text = "Copiado!"
+                    task.wait(1.5)
+                    if copyBtn and copyBtn.Parent then copyBtn.Text = "Copiar" end
+                end)
+
+                local closeBtn = Instance.new("TextButton")
+                closeBtn.Size = UDim2.new(0, 30, 0, 30)
+                closeBtn.Position = UDim2.new(1, -35, 0, 5)
+                closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+                closeBtn.Text = "X"
+                closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                closeBtn.Font = Enum.Font.GothamBold
+                closeBtn.TextSize = 14
+                closeBtn.Parent = frame
+
+                local closeCorner = Instance.new("UICorner")
+                closeCorner.CornerRadius = UDim.new(0, 6)
+                closeCorner.Parent = closeBtn
+
+                closeBtn.MouseButton1Click:Connect(function()
+                    screenGui:Destroy()
+                end)
+
+                local dragging, dragInput, dragStart, startPos
+                title.InputBegan:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                        dragging = true
+                        dragStart = input.Position
+                        startPos = frame.Position
+                        input.Changed:Connect(function()
+                            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                        end)
+                    end
+                end)
+                title.InputChanged:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                        dragInput = input
+                    end
+                end)
+                RunService.RenderStepped:Connect(function()
+                    if dragging and dragInput then
+                        local delta = dragInput.Position - dragStart
+                        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                    end
+                end)
+            end,
+        })
+    end
+end
+
+-- ============================================================
+-- EVENTOS
+-- ============================================================
+do
+    Players.PlayerRemoving:Connect(function(player)
+        if playerAlvo and playerAlvo == player then pararSeguir(); safeNotify("Saiu", player.Name) end
+        if playerPerseguidor and playerPerseguidor == player then pararFugir(); safeNotify("Saiu", player.Name) end
+        if playerSelecionadoNome == player.Name then limparHighlightSelecionado() end
+        if cloneAlvo and cloneAlvo == player then removerTodosClones(); cloneAlvo = nil; cloneAlvoNome = nil end
+        task.wait(1)
+        local lista = getListaPlayers()
+        for _, d in ipairs({"DropSeguir", "DropTP", "DropFugir", "DropCloneAlvo"}) do
+            pcall(function()
+                local f = Rayfield.Flags
+                if f and f[d] then f[d]:Refresh(lista) end
             end)
         end
-
-        -- ============================
-        -- ORIENTAÇÃO DO CORPO
-        -- ============================
-        local upVec = surfaceNormal
-        local lookVec = currentForward
-
-        lookVec = (lookVec - lookVec:Dot(upVec) * upVec)
-        if lookVec.Magnitude > 0.01 then
-            lookVec = lookVec.Unit
-        else
-            lookVec = forward
-        end
-
-        local rightVec = lookVec:Cross(upVec)
-        if rightVec.Magnitude > 0.01 then
-            rightVec = rightVec.Unit
-        else
-            rightVec = Vector3.new(1, 0, 0)
-        end
-        lookVec = upVec:Cross(rightVec).Unit
-
-        local targetCF = CFrame.fromMatrix(hrp.Position, rightVec, upVec, -lookVec)
-        bodyGyro.CFrame = targetCF
-
-        -- ============================
-        -- CABEÇA OLHA PRA CÂMERA
-        -- ============================
-        atualizarCabeca(char, surfaceNormal)
     end)
-end
 
--- ==============================
--- DESLIGAR
--- ==============================
-local function desligar()
-    if loop then
-        loop:Disconnect()
-        loop = nil
-    end
-
-    if mobileControls then
-        mobileControls.destroy()
-        mobileControls = nil
-    end
-
-    local char = player.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-
-        if hum then
-            hum.PlatformStand = false
-        end
-
-        -- Reativa script de animação
-        local animate = char:FindFirstChild("Animate")
-        if animate then
-            animate.Disabled = false
-        end
-
-        -- Reseta os motors para posição original
-        for motorName, data in pairs(bodyMotors) do
-            if data.motor then
-                data.motor.C0 = data.originalC0
-                data.motor.C1 = data.originalC1
-            end
-        end
-        
-        -- Limpa a tabela de motors
-        bodyMotors = {}
-
-        if hrp then
-            for _, obj in ipairs(hrp:GetChildren()) do
-                if obj:IsA("BodyVelocity") or obj:IsA("BodyGyro") then
-                    obj:Destroy()
-                end
-            end
-
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end
-    end
-    
-    -- Reseta estado da animação
-    animState = {
-        time = 0,
-        isMoving = false,
-        moveSpeed = 0,
-        isGrounded = true,
-        verticalVelocity = 0,
-        phase = "idle"
-    }
-    animationTime = 0
-    neckRotation = CFrame.identity
-end
-
--- ==============================
--- GUI
--- ==============================
-local function criarGUI()
-    local old = player.PlayerGui:FindFirstChild("LagatixaGUI")
-    if old then old:Destroy() end
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "LagatixaGUI"
-    gui.ResetOnSpawn = false
-    gui.DisplayOrder = 100
-    gui.Parent = player.PlayerGui
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 280, 0, 120)
-    frame.Position = UDim2.new(0.5, -140, 0, 20)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-    frame.BorderSizePixel = 2
-    frame.BorderColor3 = Color3.fromRGB(0, 170, 255)
-    frame.Active = true
-    frame.Draggable = true
-    frame.Parent = gui
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 40)
-    title.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-    title.BorderSizePixel = 0
-    title.Text = "🦎 LAGATIXA v10.2"
-    title.TextColor3 = Color3.fromRGB(0, 200, 255)
-    title.TextSize = 18
-    title.Font = Enum.Font.GothamBold
-    title.Parent = frame
-
-    local status = Instance.new("TextLabel")
-    status.Size = UDim2.new(1, -20, 0, 20)
-    status.Position = UDim2.new(0, 10, 0, 50)
-    status.BackgroundTransparency = 1
-    status.Text = "OFF"
-    status.TextColor3 = Color3.fromRGB(255, 100, 100)
-    status.TextSize = 16
-    status.Font = Enum.Font.GothamBold
-    status.TextXAlignment = Enum.TextXAlignment.Left
-    status.Parent = frame
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -20, 0, 40)
-    btn.Position = UDim2.new(0, 10, 1, -50)
-    btn.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
-    btn.BorderSizePixel = 0
-    btn.Text = "LIGAR"
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.TextSize = 18
-    btn.Font = Enum.Font.GothamBold
-    btn.Parent = frame
-
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-
-    btn.MouseButton1Click:Connect(function()
-        ativo = not ativo
-
-        if ativo then
-            btn.Text = "DESLIGAR"
-            btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-            status.Text = "ON ✓"
-            status.TextColor3 = Color3.fromRGB(100, 255, 100)
-            ligar()
-        else
-            btn.Text = "LIGAR"
-            btn.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
-            status.Text = "OFF"
-            status.TextColor3 = Color3.fromRGB(255, 100, 100)
-            desligar()
-        end
-    end)
-end
-
--- ==============================
--- INICIO
--- ==============================
-criarGUI()
-
-player.CharacterAdded:Connect(function()
-    if ativo then
-        desligar()
+    Players.PlayerAdded:Connect(function()
         task.wait(2)
-        if ativo then ligar() end
-    end
-end)
+        local lista = getListaPlayers()
+        for _, d in ipairs({"DropSeguir", "DropTP", "DropFugir", "DropCloneAlvo"}) do
+            pcall(function()
+                local f = Rayfield.Flags
+                if f and f[d] then f[d]:Refresh(lista) end
+            end)
+        end
+    end)
 
-print("[LAGATIXA v10.2] Pronto! Animação manual ativada por movimento")
-Já fiz de tudo e o movimento so é visivel para mim, os outros players não veem a animação.
+    LocalPlayer.CharacterAdded:Connect(function()
+        animSentadoTrack = nil
+        animAndarTrack = nil
+        animDancaTrack = nil
+        estaDancando = false
+        desativarFantasma()
+        addLog("Character respawn detectado", "EVENT")
+        if seguindo then
+            task.wait(2)
+            if playerAlvo and getRootPart(playerAlvo) then iniciarSeguir(playerAlvo) else pararSeguir() end
+        end
+        if fugindo then
+            task.wait(2)
+            if playerPerseguidor and getRootPart(playerPerseguidor) then iniciarFugir(playerPerseguidor) else pararFugir() end
+        end
+        if speedAtivo and not fugindo then
+            task.wait(1)
+            local h = getHumanoid(LocalPlayer)
+            if h then h.WalkSpeed = speedValor end
+        end
+    end)
+end
+
+-- ============================================================
+-- PRONTO
+-- ============================================================
+print("========================================")
+print("[DELTA v10.1] Carregado com SUCESSO!")
+print("========================================")
+addLog("=== DELTA v10.1 CARREGADO ===", "OK")
+addLog("Rayfield carregado em " .. string.format("%.2f", RayfieldLoadTime) .. "s", "INFO")
+addLog("Total logs: " .. #LogBuffer, "INFO")
+
+safeNotify("Delta v10.1", "Painel aberto com sucesso!")
