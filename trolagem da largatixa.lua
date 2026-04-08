@@ -792,4 +792,3 @@ player.CharacterAdded:Connect(function()
 end)
 
 print("[LAGATIXA v10.2] Pronto! Animação manual ativada por movimento")
-Já fiz de tudo e o movimento so é visivel para mim, os outros players não veem a animação.
